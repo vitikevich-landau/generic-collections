@@ -1,0 +1,8 @@
+# Go build and test artifacts
+/generic-collections
+/generic-collections.exe
+/coverage.out
+
+# Editor settings
+.idea/
+.vscode/

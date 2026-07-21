@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>generic-collections — дженерики в Go</title>
+<style>
+  /* ────────────────────────────────────────────────────────────────
+     Токены. Палитра завязана на «лестницу ограничений»: три цвета за
+     тремя уровнями по нарастанию строгости —
+     бирюза (any, любой тип) → индиго (comparable, ==) →
+     оранжевый (Number/Ordered, арифметика и порядок).
+     ──────────────────────────────────────────────────────────────── */
+  :root {
+    color-scheme: light dark;
+
+    --bg:        #eceef3;
+    --surface:   #ffffff;
+    --surface-2: #f2f4f8;
+    --ink:       #171a24;
+    --muted:     #5b6472;
+    --line:      #d5d9e2;
+    --line-soft: #e6e9ef;
+
+    /* Три уровня ограничений — единый код цвета по всей странице */
+    --c-any:  #0e8f81;  /* any        — любой тип        */
+    --c-comp: #4d54d6;  /* comparable — можно ==         */
+    --c-num:  #d1660a;  /* Number/Ordered — + - * и < >  */
+
+    --accent: var(--c-comp);
+    --good:   #0e8f81;
+    --warn:   #c98a00;
+    --danger: #d33c42;
+
+    --radius: 12px;
+    --rail-w: 240px;
+    --measure: 68ch;
+
+    --mono: ui-monospace, "Cascadia Code", "Cascadia Mono", "SFMono-Regular",
+            Consolas, Menlo, monospace;
+    --sans: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+    --shadow: 0 1px 2px rgba(20,24,40,.06), 0 8px 24px rgba(20,24,40,.06);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #0e1017;
+      --surface:   #161a24;
+      --surface-2: #1b2030;
+      --ink:       #e7eaf3;
+      --muted:     #98a1b4;
+      --line:      #2a3040;
+      --line-soft: #202633;
+
+      --c-any:  #21b6a6;
+      --c-comp: #8b90ff;
+      --c-num:  #f6902f;
+
+      --good:   #21b6a6;
+      --warn:   #f5b301;
+      --danger: #f0575c;
+
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 32px rgba(0,0,0,.35);
+    }
+  }
+
+  /* Ручной переключатель темы перекрывает системную настройку в обе стороны */
+  :root[data-theme="light"] {
+    --bg:#eceef3; --surface:#ffffff; --surface-2:#f2f4f8; --ink:#171a24;
+    --muted:#5b6472; --line:#d5d9e2; --line-soft:#e6e9ef;
+    --c-any:#0e8f81; --c-comp:#4d54d6; --c-num:#d1660a;
+    --good:#0e8f81; --warn:#c98a00; --danger:#d33c42;
+    --shadow:0 1px 2px rgba(20,24,40,.06),0 8px 24px rgba(20,24,40,.06);
+  }
+  :root[data-theme="dark"] {
+    --bg:#0e1017; --surface:#161a24; --surface-2:#1b2030; --ink:#e7eaf3;
+    --muted:#98a1b4; --line:#2a3040; --line-soft:#202633;
+    --c-any:#21b6a6; --c-comp:#8b90ff; --c-num:#f6902f;
+    --good:#21b6a6; --warn:#f5b301; --danger:#f0575c;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; }
+
+  code, kbd, .mono { font-family: var(--mono); }
+  code {
+    font-size: .875em;
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
+    padding: .08em .38em;
+    border-radius: 6px;
+  }
+
+  /* ── Каркас: слева оглавление, справа контент ── */
+  .layout {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(16px, 4vw, 40px);
+    display: grid;
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    gap: clamp(24px, 4vw, 56px);
+  }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .rail { display: none; }
+  }
+
+  /* ── Rail (оглавление) ── */
+  .rail { position: relative; }
+  .rail-inner {
+    position: sticky;
+    top: 24px;
+    padding: 20px 0;
+  }
+  .rail-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 16px 4px;
+  }
+  .rail ol { list-style: none; margin: 0; padding: 0; position: relative; }
+  .rail ol::before {
+    content: ""; position: absolute; left: 9px; top: 8px; bottom: 8px;
+    width: 2px; background: var(--line); border-radius: 2px;
+  }
+  .rail li { position: relative; }
+  .rail a {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 7px 8px 7px 0; text-decoration: none;
+    color: var(--muted); font-size: 13.5px; line-height: 1.35;
+    border-radius: 8px;
+  }
+  .rail a::before {
+    content: ""; flex: 0 0 auto; width: 12px; height: 12px; margin-top: 5px;
+    margin-left: 4px; border-radius: 50%;
+    background: var(--surface); border: 2px solid var(--line);
+    transition: background .2s, border-color .2s, transform .2s;
+  }
+  .rail a .code { font-family: var(--mono); font-size: 11px; opacity: .7; }
+  .rail a:hover { color: var(--ink); }
+  .rail a:hover::before { border-color: var(--accent); }
+  .rail a.active { color: var(--ink); font-weight: 600; }
+  .rail a.active::before {
+    background: var(--accent); border-color: var(--accent);
+    transform: scale(1.15);
+  }
+
+  /* ── Контент ── */
+  main { min-width: 0; padding-bottom: 96px; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .eyebrow .num {
+    font-weight: 700;
+    color: var(--ink);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 1px 7px;
+  }
+
+  h1 {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: clamp(30px, 5.2vw, 52px);
+    line-height: 1.05;
+    letter-spacing: -.01em;
+    text-wrap: balance;
+    margin: 18px 0 0;
+  }
+  h2 {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: clamp(21px, 3vw, 29px);
+    letter-spacing: -.01em;
+    text-wrap: balance;
+    margin: 8px 0 0;
+  }
+  h3 { font-size: 17px; margin: 0 0 6px; }
+  p { margin: 12px 0; max-width: var(--measure); }
+  .lead { font-size: clamp(17px, 2.2vw, 20px); color: var(--muted); max-width: 60ch; }
+
+  section { padding-top: 64px; scroll-margin-top: 20px; }
+  section > .eyebrow + h2 { margin-top: 10px; }
+  .divider { height: 1px; background: var(--line-soft); margin-top: 64px; }
+
+  /* Hero */
+  .hero {
+    padding-top: 40px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; padding-top: 24px;
+  }
+  .brand {
+    font-family: var(--mono); font-weight: 700; letter-spacing: .04em;
+    display: flex; align-items: center; gap: 10px; font-size: 14px;
+  }
+  .brand .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); }
+  .theme-toggle {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .06em;
+    cursor: pointer; background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 7px 14px; display: inline-flex; align-items: center; gap: 8px;
+  }
+  .theme-toggle:hover { border-color: var(--accent); }
+  .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .stat-row {
+    display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px;
+  }
+  .chip {
+    font-family: var(--mono); font-size: 12.5px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 999px; padding: 6px 13px; color: var(--muted);
+  }
+  .chip b { color: var(--ink); font-weight: 700; }
+
+  /* Card grids */
+  .grid { display: grid; gap: 16px; margin-top: 24px; }
+  .grid.cols-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .grid.cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  @media (max-width: 680px) { .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px;
+    box-shadow: var(--shadow);
+  }
+  .card h3 { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .card p { margin: 6px 0 0; font-size: 14.5px; color: var(--muted); max-width: none; }
+  .card p + p { margin-top: 10px; }
+  .card pre.mini {
+    margin: 12px 0 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+    background: var(--surface-2); border: 1px solid var(--line-soft);
+    border-radius: 8px; padding: 10px 12px; overflow-x: auto; color: var(--ink);
+  }
+
+  .tag {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .05em;
+    text-transform: uppercase; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  }
+  .tag.any  { color: var(--c-any);  border-color: color-mix(in oklab, var(--c-any) 45%, var(--line)); }
+  .tag.comp { color: var(--c-comp); border-color: color-mix(in oklab, var(--c-comp) 45%, var(--line)); }
+  .tag.num  { color: var(--c-num);  border-color: color-mix(in oklab, var(--c-num) 45%, var(--line)); }
+  .tag.good   { color: var(--good);   border-color: color-mix(in oklab, var(--good) 45%, var(--line)); }
+  .tag.danger { color: var(--danger); border-color: color-mix(in oklab, var(--danger) 45%, var(--line)); }
+
+  /* left color stripe on themed cards */
+  .card.impl { border-left-width: 4px; }
+  .card.impl.any  { border-left-color: var(--c-any); }
+  .card.impl.comp { border-left-color: var(--c-comp); }
+  .card.impl.num  { border-left-color: var(--c-num); }
+
+  /* Diagram frame */
+  .diagram {
+    margin-top: 24px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .diagram .scroll { overflow-x: auto; padding: 10px; }
+  .diagram svg { display: block; min-width: 640px; width: 100%; height: auto; }
+  .diagram figcaption {
+    padding: 12px 18px; border-top: 1px solid var(--line-soft);
+    font-size: 13px; color: var(--muted);
+  }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 16px 22px; margin-top: 16px; }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); font-family: var(--mono); }
+  .legend i { width: 22px; height: 4px; border-radius: 3px; display: inline-block; }
+
+  /* SVG shared classes (theme-aware via vars) */
+  svg .node { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; }
+  svg .lbl  { fill: var(--ink); font-family: var(--mono); font-size: 13px; }
+  svg .lbl.sm { font-size: 11px; fill: var(--muted); }
+  svg .lbl.b  { font-weight: 700; }
+  svg .guide { stroke: var(--line-soft); stroke-width: 1.5; stroke-dasharray: 3 5; }
+  svg .flow  { stroke: var(--accent); stroke-width: 2; fill: none; }
+  svg text { dominant-baseline: middle; }
+
+  /* Cheatsheet / file table */
+  .table-wrap { overflow-x: auto; margin-top: 20px; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; background: var(--surface); font-size: 14px; }
+  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); position: sticky; top: 0; }
+  tbody tr:last-child td { border-bottom: none; }
+  td code { white-space: nowrap; }
+  .file-cell { font-family: var(--mono); font-size: 12.5px; color: var(--accent); }
+
+  /* Trace terminal */
+  .terminal {
+    margin-top: 24px; background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); overflow: hidden; font-family: var(--mono);
+  }
+  .terminal .bar {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    background: var(--surface-2); border-bottom: 1px solid var(--line-soft);
+    font-size: 12px; color: var(--muted);
+  }
+  .terminal .bar .b { width: 11px; height: 11px; border-radius: 50%; background: var(--line); }
+  .terminal .body { padding: 16px 18px; overflow-x: auto; font-size: 13px; line-height: 1.75; }
+  .terminal pre { margin: 0; white-space: pre; }
+  .t-sys  { color: var(--ink); font-weight: 700; }
+  .t-any  { color: var(--c-any); font-weight: 700; }
+  .t-comp { color: var(--c-comp); font-weight: 700; }
+  .t-num  { color: var(--c-num); font-weight: 700; }
+  .t-dim  { color: var(--muted); }
+  .annot  { color: var(--accent); font-style: italic; }
+
+  .note {
+    margin-top: 20px; display: flex; gap: 14px; align-items: flex-start;
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 16px 18px;
+  }
+  .note .ic { font-size: 20px; line-height: 1.4; }
+  .note p { margin: 0; font-size: 14.5px; }
+  .note.danger { border-left-color: var(--danger); }
+  .note.good { border-left-color: var(--good); }
+  .note.num { border-left-color: var(--c-num); }
+
+  footer {
+    border-top: 1px solid var(--line-soft); margin-top: 72px; padding-top: 28px;
+    color: var(--muted); font-size: 13.5px;
+  }
+  footer code { font-size: 12.5px; }
+
+  ul.clean { padding-left: 20px; margin: 10px 0; }
+  ul.clean li { margin: 5px 0; max-width: var(--measure); }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Оглавление ── -->
+  <nav class="rail" aria-label="Разделы">
+    <div class="rail-inner">
+      <p class="rail-title">Разделы ↓</p>
+      <ol>
+        <li><a href="#obzor"><span class="code">01</span><span>Обзор темы</span></a></li>
+        <li><a href="#karta"><span class="code">02</span><span>Карта проекта</span></a></li>
+        <li><a href="#param"><span class="code">03</span><span>Параметр типа [T]</span></a></li>
+        <li><a href="#stack-queue"><span class="code">04</span><span>Stack и Queue</span></a></li>
+        <li><a href="#set"><span class="code">05</span><span>Set: comparable</span></a></li>
+        <li><a href="#mapreduce"><span class="code">06</span><span>Map / Filter / Reduce</span></a></li>
+        <li><a href="#lestnica"><span class="code">07</span><span>Лестница ограничений</span></a></li>
+        <li><a href="#grabli"><span class="code">08</span><span>Грабли дженериков</span></a></li>
+        <li><a href="#trassa"><span class="code">09</span><span>Живая трасса</span></a></li>
+        <li><a href="#fayly"><span class="code">10</span><span>Карта файлов</span></a></li>
+      </ol>
+    </div>
+  </nav>
+
+  <main>
+    <!-- ── Header / hero ── -->
+    <div class="topbar">
+      <div class="brand"><span class="dot"></span>GENERIC-COLLECTIONS · TYPE-SAFE TOOLKIT</div>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Переключить тему">
+        <span id="themeIcon">◐</span><span id="themeLabel">тема</span>
+      </button>
+    </div>
+
+    <header class="hero">
+      <span class="eyebrow">Учебный разбор · Go · дженерики (generics)</span>
+      <h1>Один код —<br>любой тип</h1>
+      <p class="lead">
+        Мини-тулкит типобезопасных коллекций: <code>Stack</code>,
+        <code>Queue</code>, <code>Set</code> и функции <code>Map</code> /
+        <code>Filter</code> / <code>Reduce</code>. Пишем один раз с
+        <b>параметром типа</b> — компилятор подставляет конкретный тип и проверяет
+        всё заранее. Без <code>interface{}</code> и без приведений
+        <code>v.(int)</code>.
+      </p>
+      <div class="stat-row">
+        <span class="chip"><b>3</b> коллекции</span>
+        <span class="chip"><b>7</b> дженерик-функций</span>
+        <span class="chip"><b>0</b> interface{}</span>
+        <span class="chip"><b>0</b> приведений типа</span>
+        <span class="chip">any · comparable · <b>Number</b></span>
+      </div>
+    </header>
+
+    <!-- ── 01 Обзор ── -->
+    <section id="obzor">
+      <span class="eyebrow"><span class="num">01</span> Обзор темы</span>
+      <h2>Зачем дженерики, если есть interface{}</h2>
+      <p>
+        До Go 1.18 «контейнер чего угодно» держал <code>interface{}</code> и
+        возвращал его же — а вызывающий руками приводил тип обратно. Компилятор
+        при этом молчал: ошибку ловил только рантайм. Дженерики переносят проверку
+        на <b>этап компиляции</b> и сохраняют конкретный тип на входе и выходе.
+      </p>
+      <div class="grid cols-2">
+        <div class="card impl danger" style="border-left-color:var(--danger)">
+          <h3>🕹️ Старый способ <span class="tag danger">до 1.18</span></h3>
+          <p>Хранили <code>interface{}</code>, на выходе — приведение типа. Ошибся
+          типом — <b>паника в рантайме</b>, компилятор не помог.</p>
+          <pre class="mini">s := []interface{}{}
+s = append(s, 42)
+v := s[0].(int)     // приведение
+x := s[0].(string)  // ПАНИКА</pre>
+        </div>
+        <div class="card impl comp">
+          <h3>✅ Дженерики <span class="tag comp">Go 1.18+</span></h3>
+          <p>Параметр типа <code>[T any]</code>: <code>Stack[int]</code> держит
+          только <code>int</code>, <code>Pop</code> сразу отдаёт <code>int</code>.
+          Ошибку типа поймает <b>компилятор</b>.</p>
+          <pre class="mini">var s Stack[int]
+s.Push(42)
+v, ok := s.Pop()    // v уже int
+s.Push("текст")     // ошибка КОМПИЛЯЦИИ</pre>
+        </div>
+      </div>
+      <p style="margin-top:20px">
+        Ровно на дженериках держатся современные пакеты стандартной библиотеки —
+        <code>slices</code> и <code>maps</code>. Этот проект собирает такой же
+        маленький типобезопасный тулкит своими руками.
+      </p>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ── 02 Карта проекта ── -->
+    <section id="karta">
+      <span class="eyebrow"><span class="num">02</span> Карта проекта</span>
+      <h2>Тулкит, раскрашенный по силе ограничения</h2>
+      <p>
+        Каждая часть тулкита требует от типа ровно столько, сколько ей нужно.
+        Цвет показывает ограничение: <b>any</b> (любой тип), <b>comparable</b>
+        (можно <code>==</code>), <b>Number</b> / <b>Ordered</b> (арифметика и
+        порядок). Чем строже — тем меньше типов подойдёт, но тем больше можно
+        внутри.
+      </p>
+
+      <figure class="diagram">
+        <div class="scroll">
+          <svg viewBox="0 0 880 320" role="img"
+               aria-label="Карта проекта: части тулкита сгруппированы по ограничению any, comparable, Number">
+            <!-- any -->
+            <rect class="node" x="24" y="40" width="270" height="240" rx="11" stroke="var(--c-any)" stroke-width="2"/>
+            <text class="lbl b" x="44" y="66" fill="var(--c-any)">[T any] — любой тип</text>
+            <text class="lbl sm" x="44" y="86">хранить и передавать; == нельзя</text>
+            <rect class="node" x="44" y="104" width="230" height="40" rx="8"/>
+            <text class="lbl" x="59" y="124">Stack[T]</text><text class="lbl sm" x="150" y="124">Push · Pop · Peek</text>
+            <rect class="node" x="44" y="152" width="230" height="40" rx="8"/>
+            <text class="lbl" x="59" y="172">Queue[T]</text><text class="lbl sm" x="150" y="172">Enqueue · Dequeue</text>
+            <rect class="node" x="44" y="200" width="230" height="64" rx="8"/>
+            <text class="lbl" x="59" y="222">Map · Filter</text><text class="lbl sm" x="59" y="242">Reduce</text>
+            <text class="lbl sm" x="180" y="232" fill="var(--c-any)">[]T → []U</text>
+
+            <!-- comparable -->
+            <rect class="node" x="306" y="40" width="264" height="240" rx="11" stroke="var(--c-comp)" stroke-width="2"/>
+            <text class="lbl b" x="326" y="66" fill="var(--c-comp)">[T comparable] — ==</text>
+            <text class="lbl sm" x="326" y="86">можно сравнивать; ключ карты</text>
+            <rect class="node" x="326" y="104" width="224" height="64" rx="8"/>
+            <text class="lbl" x="341" y="126">Set[T]</text>
+            <text class="lbl sm" x="341" y="148">map[T]struct&#123;&#125; · Add/Has</text>
+            <rect class="node" x="326" y="176" width="224" height="40" rx="8"/>
+            <text class="lbl" x="341" y="196">Index</text><text class="lbl sm" x="420" y="196">поиск через ==</text>
+            <rect class="node" x="326" y="224" width="224" height="40" rx="8"/>
+            <text class="lbl" x="341" y="244">Keys</text><text class="lbl sm" x="420" y="244">ключи карты → срез</text>
+
+            <!-- Number / Ordered -->
+            <rect class="node" x="582" y="40" width="274" height="240" rx="11" stroke="var(--c-num)" stroke-width="2"/>
+            <text class="lbl b" x="602" y="66" fill="var(--c-num)">Number / Ordered</text>
+            <text class="lbl sm" x="602" y="86">арифметика + - * и порядок &lt; &gt;</text>
+            <rect class="node" x="602" y="104" width="234" height="64" rx="8"/>
+            <text class="lbl" x="617" y="126">Sum[T Number]</text>
+            <text class="lbl sm" x="617" y="148">union ~int | ~float64 …</text>
+            <rect class="node" x="602" y="176" width="234" height="64" rx="8"/>
+            <text class="lbl" x="617" y="198">SortedKeys</text>
+            <text class="lbl sm" x="617" y="220">cmp.Ordered + slices.Sort</text>
+            <text class="lbl sm" x="602" y="262" fill="var(--muted)">строже → уже круг типов</text>
+          </svg>
+        </div>
+        <figcaption>
+          Все три группы живут в файлах <code>stack.go</code>, <code>queue.go</code>,
+          <code>set.go</code> и <code>slices.go</code>. Ограничение — это «контракт»:
+          что метод/функция вправе делать с <code>T</code>.
+        </figcaption>
+      </figure>
+
+      <div class="legend" aria-hidden="true">
+        <span><i style="background:var(--c-any)"></i> any — любой тип</span>
+        <span><i style="background:var(--c-comp)"></i> comparable — ==</span>
+        <span><i style="background:var(--c-num)"></i> Number/Ordered — + - * · &lt; &gt;</span>
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ── 03 Параметр типа ── -->
+    <section id="param">
+      <span class="eyebrow"><span class="num">03</span> Параметр типа [T]</span>
+      <h2>Из шаблона — конкретный тип</h2>
+      <p>
+        <code>Stack[T any]</code> — это <b>шаблон</b>, а не готовый тип. Пока не
+        подставишь конкретный <code>T</code>, стека нет. Подстановка называется
+        <b>инстанциацией</b>: <code>Stack[int]</code> и <code>Stack[string]</code>
+        — два разных, полностью проверенных типа. Часто <code>T</code> писать не
+        нужно — компилятор <b>выведет</b> его из аргументов.
+      </p>
+
+      <figure class="diagram">
+        <div class="scroll">
+          <svg viewBox="0 0 880 280" role="img"
+               aria-label="Шаблон Stack[T] инстанциируется в Stack[int] и Stack[string]; вывод типа у Map">
+            <defs>
+              <marker id="ah-c" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+                <path d="M0,0 L9,4.5 L0,9 z" fill="var(--c-comp)"/>
+              </marker>
+            </defs>
+
+            <!-- шаблон -->
+            <rect class="node" x="40" y="90" width="210" height="88" rx="10" stroke="var(--c-comp)" stroke-width="2.5"/>
+            <text class="lbl b" x="60" y="118" fill="var(--c-comp)">Stack[T any]</text>
+            <text class="lbl sm" x="60" y="142">шаблон: items []T</text>
+            <text class="lbl sm" x="60" y="162" fill="var(--muted)">типа ещё нет</text>
+
+            <!-- инстанциация -->
+            <path class="flow" marker-end="url(#ah-c)" d="M250,120 C300,120 300,72 348,72"/>
+            <path class="flow" marker-end="url(#ah-c)" d="M250,150 C300,150 300,196 348,196"/>
+            <text class="lbl sm" x="300" y="98" text-anchor="middle" fill="var(--c-comp)">[int]</text>
+            <text class="lbl sm" x="300" y="176" text-anchor="middle" fill="var(--c-comp)">[string]</text>
+
+            <rect class="node" x="358" y="46" width="220" height="52" rx="9"/>
+            <text class="lbl b" x="378" y="66">Stack[int]</text>
+            <text class="lbl sm" x="378" y="84">items []int · Pop()→int</text>
+            <rect class="node" x="358" y="170" width="220" height="52" rx="9"/>
+            <text class="lbl b" x="378" y="190">Stack[string]</text>
+            <text class="lbl sm" x="378" y="208">items []string · Pop()→string</text>
+
+            <!-- вывод типов -->
+            <rect class="node" x="620" y="86" width="236" height="106" rx="10" stroke="var(--c-any)" stroke-width="1.5"/>
+            <text class="lbl b" x="640" y="110" fill="var(--c-any)">Вывод типа</text>
+            <text class="lbl sm" x="640" y="134">Map([]int{…}, itoa)</text>
+            <text class="lbl sm" x="640" y="156" fill="var(--c-any)">T=int, U=string</text>
+            <text class="lbl sm" x="640" y="176">— выведены из аргументов</text>
+          </svg>
+        </div>
+        <figcaption>
+          <code>Stack[int]</code> и <code>Stack[string]</code> — разные типы: положить
+          строку в <code>Stack[int]</code> не даст компилятор. А в вызовах вроде
+          <code>Map(nums, itoa)</code> параметры типа обычно выводятся сами.
+        </figcaption>
+      </figure>
+
+      <div class="note good">
+        <span class="ic">🧩</span>
+        <p><b>Методы не вводят своих параметров типа.</b> Их объявляет только сам
+        тип (<code>Stack[T]</code>), а методы лишь используют <code>T</code>. Нужен
+        новый параметр (как <code>U</code> в <code>Map</code>) — это обычная
+        <b>функция</b>, а не метод: <code>func (s *Stack[T]) MapTo[U any](…)</code>
+        не скомпилируется.</p>
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ── 04 Stack и Queue ── -->
+    <section id="stack-queue">
+      <span class="eyebrow"><span class="num">04</span> Stack и Queue</span>
+      <h2>LIFO против FIFO и приём (T, bool)</h2>
+      <p>
+        Обе коллекции — это срез <code>[]T</code> внутри и параметр
+        <code>[T any]</code>. Разница лишь в том, с какого конца снимаем: стек —
+        сверху (последний вошёл — первый вышел), очередь — с начала (первый вошёл
+        — первый вышел). Из <b>пустой</b> коллекции возвращаем не панику, а
+        <code>(нулевое значение, false)</code>.
+      </p>
+
+      <figure class="diagram">
+        <div class="scroll">
+          <svg viewBox="0 0 880 300" role="img"
+               aria-label="Стек: push и pop сверху. Очередь: enqueue в конец, dequeue с начала.">
+            <defs>
+              <marker id="ah-any" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+                <path d="M0,0 L9,4.5 L0,9 z" fill="var(--c-any)"/>
+              </marker>
+            </defs>
+
+            <!-- Stack -->
+            <text class="lbl b" x="40" y="34" fill="var(--c-any)">Stack[int] — LIFO</text>
+            <rect x="70" y="150" width="120" height="34" rx="5" fill="color-mix(in oklab, var(--c-any) 16%, var(--surface))" stroke="var(--c-any)" stroke-width="1.5"/>
+            <text class="lbl" x="130" y="167" text-anchor="middle">10</text>
+            <rect x="70" y="112" width="120" height="34" rx="5" fill="color-mix(in oklab, var(--c-any) 16%, var(--surface))" stroke="var(--c-any)" stroke-width="1.5"/>
+            <text class="lbl" x="130" y="129" text-anchor="middle">20</text>
+            <rect x="70" y="74" width="120" height="34" rx="5" fill="color-mix(in oklab, var(--c-any) 30%, var(--surface))" stroke="var(--c-any)" stroke-width="2"/>
+            <text class="lbl b" x="130" y="91" text-anchor="middle">30 ← вершина</text>
+            <path class="flow" stroke="var(--c-any)" marker-end="url(#ah-any)" d="M250,66 C210,66 210,74 196,80"/>
+            <text class="lbl sm" x="256" y="66" fill="var(--c-any)">Push(30)</text>
+            <path class="flow" stroke="var(--c-any)" marker-end="url(#ah-any)" d="M196,86 C214,60 244,64 300,74" transform="translate(0,0)"/>
+            <text class="lbl sm" x="256" y="104" fill="var(--muted)">Pop() → (30, true)</text>
+            <text class="lbl sm" x="70" y="212" fill="var(--muted)">кладём и снимаем с ОДНОГО конца (сверху)</text>
+
+            <!-- Queue -->
+            <text class="lbl b" x="470" y="34" fill="var(--c-any)">Queue[string] — FIFO</text>
+            <rect x="470" y="74" width="88" height="46" rx="6" fill="color-mix(in oklab, var(--c-any) 30%, var(--surface))" stroke="var(--c-any)" stroke-width="2"/>
+            <text class="lbl" x="514" y="97" text-anchor="middle">Аня</text>
+            <rect x="562" y="74" width="88" height="46" rx="6" fill="color-mix(in oklab, var(--c-any) 16%, var(--surface))" stroke="var(--c-any)" stroke-width="1.5"/>
+            <text class="lbl" x="606" y="97" text-anchor="middle">Борис</text>
+            <rect x="654" y="74" width="88" height="46" rx="6" fill="color-mix(in oklab, var(--c-any) 16%, var(--surface))" stroke="var(--c-any)" stroke-width="1.5"/>
+            <text class="lbl" x="698" y="97" text-anchor="middle">Вера</text>
+            <path class="flow" stroke="var(--c-any)" marker-end="url(#ah-any)" d="M470,150 L458,150 L458,97 L466,97"/>
+            <text class="lbl sm" x="474" y="168" fill="var(--muted)">Dequeue() → («Аня», true)  ← начало</text>
+            <path class="flow" stroke="var(--c-any)" marker-end="url(#ah-any)" d="M790,97 L750,97"/>
+            <text class="lbl sm" x="796" y="97" fill="var(--c-any)">Enqueue</text>
+            <text class="lbl sm" x="654" y="150" fill="var(--muted)">конец →</text>
+
+            <!-- (T,bool) -->
+            <rect class="node" x="70" y="234" width="740" height="46" rx="9"/>
+            <text class="lbl" x="90" y="257">Пустая коллекция:</text>
+            <text class="lbl b" x="250" y="257" fill="var(--c-any)">var zero T; return zero, false</text>
+            <text class="lbl sm" x="560" y="257" fill="var(--muted)">— второй bool заменяет панику; вызывающий его проверяет</text>
+          </svg>
+        </div>
+        <figcaption>
+          <code>var zero T</code> — единственный способ «придумать пустое значение»
+          неизвестного заранее типа: для <code>int</code> это 0, для
+          <code>string</code> — <code>""</code>, для указателя — <code>nil</code>.
+        </figcaption>
+      </figure>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ── 05 Set ── -->
+    <section id="set">
+      <span class="eyebrow"><span class="num">05</span> Set: comparable</span>
+      <h2>Почему множеству нужен именно comparable</h2>
+      <p>
+        <code>Set[T]</code> — это <code>map[T]struct&#123;&#125;</code>: наличие
+        ключа означает «элемент есть», а значение <code>struct&#123;&#125;</code>
+        занимает 0 байт. Но ключ карты в Go <b>обязан</b> быть сравним через
+        <code>==</code> — поэтому <code>Set[T any]</code> не скомпилируется, нужен
+        <code>Set[T comparable]</code>.
+      </p>
+
+      <figure class="diagram">
+        <div class="scroll">
+          <svg viewBox="0 0 880 280" role="img"
+               aria-label="Set это map ключ в struct{}; путь NewSet работает, путь nil-карты Add паникует">
+            <defs>
+              <marker id="ah-ok" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+                <path d="M0,0 L9,4.5 L0,9 z" fill="var(--good)"/>
+              </marker>
+              <marker id="ah-no" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+                <path d="M0,0 L9,4.5 L0,9 z" fill="var(--danger)"/>
+              </marker>
+            </defs>
+
+            <!-- Внутреннее устройство -->
+            <text class="lbl b" x="40" y="34" fill="var(--c-comp)">Set[string] = map[string]struct&#123;&#125;</text>
+            <rect class="node" x="40" y="52" width="320" height="150" rx="10" stroke="var(--c-comp)"/>
+            <text class="lbl sm" x="60" y="80">"яблоко"</text><text class="lbl sm" x="240" y="80" fill="var(--muted)">→ struct&#123;&#125; (0 Б)</text>
+            <text class="lbl sm" x="60" y="108">"груша"</text><text class="lbl sm" x="240" y="108" fill="var(--muted)">→ struct&#123;&#125;</text>
+            <text class="lbl sm" x="60" y="136">"слива"</text><text class="lbl sm" x="240" y="136" fill="var(--muted)">→ struct&#123;&#125;</text>
+            <line x1="60" y1="152" x2="340" y2="152" stroke="var(--line)" stroke-width="1"/>
+            <text class="lbl sm" x="60" y="176" fill="var(--c-comp)">Has(v): _, ok := m[v] → быстрый поиск</text>
+
+            <!-- Два пути создания -->
+            <text class="lbl sm" x="450" y="42" fill="var(--good)">NewSet(…) / make → рабочая карта</text>
+            <rect class="node" x="450" y="56" width="180" height="46" rx="9" stroke="var(--good)"/>
+            <text class="lbl" x="470" y="79">make(Set[T])</text>
+            <path class="flow" stroke="var(--good)" marker-end="url(#ah-ok)" d="M630,79 L700,79"/>
+            <rect class="node" x="710" y="56" width="140" height="46" rx="9" stroke="var(--good)"/>
+            <text class="lbl b" x="780" y="79" text-anchor="middle" fill="var(--good)">Add ✓</text>
+
+            <text class="lbl sm" x="450" y="150" fill="var(--danger)">var s Set[T] → nil-карта</text>
+            <rect class="node" x="450" y="164" width="180" height="46" rx="9" stroke="var(--danger)"/>
+            <text class="lbl" x="470" y="187">nil map</text>
+            <text class="lbl sm" x="545" y="187" fill="var(--muted)">Has/Remove ок</text>
+            <path stroke="var(--danger)" stroke-width="2" fill="none" marker-end="url(#ah-no)" d="M630,187 L700,187"/>
+            <rect class="node" x="710" y="164" width="140" height="46" rx="9" stroke="var(--danger)"/>
+            <text class="lbl b" x="780" y="187" text-anchor="middle" fill="var(--danger)">Add ⇒ ПАНИКА</text>
+            <text class="lbl sm" x="450" y="238" fill="var(--muted)">assignment to entry in nil map</text>
+          </svg>
+        </div>
+        <figcaption>
+          Ресивер у методов <code>Set</code> — <b>значение</b>, а не указатель:
+          карта уже ссылочный тип, копия смотрит на ту же таблицу. Но
+          <code>Add</code> на <code>nil</code>-карте паникует — поэтому множество
+          заводят через <code>NewSet</code>.
+        </figcaption>
+      </figure>
+
+      <div class="note danger">
+        <span class="ic">🚫</span>
+        <p><b>Set[T any] не скомпилируется.</b> Сообщение компилятора:
+        <code>T does not satisfy comparable</code>. Ключу карты нужен
+        <code>==</code>, а <code>any</code> его не гарантирует (например, срез
+        сравнивать через <code>==</code> нельзя). Ставь <code>T comparable</code>.</p>
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ── 06 Map/Filter/Reduce ── -->
+    <section id="mapreduce">
+      <span class="eyebrow"><span class="num">06</span> Map / Filter / Reduce</span>
+      <h2>Конвейер над срезами: []T → []U</h2>
+      <p>
+        Три универсальные функции над <code>[]T</code>. У <code>Map</code> —
+        <b>два</b> параметра типа: вход <code>T</code> и выход <code>U</code>,
+        поэтому он умеет <b>менять тип</b> (<code>[]int → []string</code>).
+        <code>Filter</code> тип сохраняет (один <code>T</code>), а
+        <code>Reduce</code> сворачивает весь срез в одно значение <code>U</code>.
+      </p>
+
+      <figure class="diagram">
+        <div class="scroll">
+          <svg viewBox="0 0 880 260" role="img"
+               aria-label="Map меняет тип int в string, Filter оставляет чётные, Reduce складывает в число">
+            <defs>
+              <marker id="ah-a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+                <path d="M0,0 L9,4.5 L0,9 z" fill="var(--c-any)"/>
+              </marker>
+            </defs>
+
+            <!-- Map -->
+            <text class="lbl b" x="40" y="34" fill="var(--c-any)">Map[T, U] — меняет тип</text>
+            <rect class="node" x="40" y="48" width="150" height="40" rx="8"/>
+            <text class="lbl sm" x="115" y="68" text-anchor="middle">[]int {1,2,3}</text>
+            <path class="flow" stroke="var(--c-any)" marker-end="url(#ah-a)" d="M190,68 L250,68"/>
+            <text class="lbl sm" x="220" y="52" text-anchor="middle" fill="var(--c-any)">f: int→string</text>
+            <rect class="node" x="260" y="48" width="170" height="40" rx="8" stroke="var(--c-any)"/>
+            <text class="lbl sm" x="345" y="68" text-anchor="middle">[]string {"#1","#2","#3"}</text>
+
+            <!-- Filter -->
+            <text class="lbl b" x="40" y="126" fill="var(--c-any)">Filter[T] — сохраняет тип</text>
+            <rect class="node" x="40" y="140" width="180" height="40" rx="8"/>
+            <text class="lbl sm" x="130" y="160" text-anchor="middle">[]int {1,2,3,4,5,6}</text>
+            <path class="flow" stroke="var(--c-any)" marker-end="url(#ah-a)" d="M220,160 L280,160"/>
+            <text class="lbl sm" x="250" y="144" text-anchor="middle" fill="var(--c-any)">keep: чётное?</text>
+            <rect class="node" x="290" y="140" width="150" height="40" rx="8" stroke="var(--c-any)"/>
+            <text class="lbl sm" x="365" y="160" text-anchor="middle">[]int {2,4,6}</text>
+
+            <!-- Reduce -->
+            <text class="lbl b" x="40" y="218" fill="var(--c-any)">Reduce[T, U] — в одно значение</text>
+            <rect class="node" x="40" y="232" width="180" height="24" rx="6"/>
+            <text class="lbl sm" x="130" y="245" text-anchor="middle">[]int {1..6}</text>
+            <path class="flow" stroke="var(--c-any)" marker-end="url(#ah-a)" d="M220,244 L290,244"/>
+            <text class="lbl sm" x="255" y="230" text-anchor="middle" fill="var(--c-any)">acc+n, init 0</text>
+            <rect class="node" x="300" y="232" width="80" height="24" rx="6" stroke="var(--c-any)"/>
+            <text class="lbl b" x="340" y="245" text-anchor="middle">21</text>
+
+            <!-- Правая колонка: сигнатуры -->
+            <rect class="node" x="500" y="48" width="356" height="164" rx="10"/>
+            <text class="lbl b" x="520" y="74">Сигнатуры</text>
+            <line x1="520" y1="86" x2="836" y2="86" stroke="var(--line)" stroke-width="1"/>
+            <text class="lbl sm" x="520" y="110">Map[T, U any](in []T, f func(T) U) []U</text>
+            <text class="lbl sm" x="520" y="138">Filter[T any](in []T, keep func(T) bool) []T</text>
+            <text class="lbl sm" x="520" y="166">Reduce[T, U any](in []T, init U,</text>
+            <text class="lbl sm" x="560" y="186">f func(U, T) U) U</text>
+          </svg>
+        </div>
+        <figcaption>
+          Второй параметр типа <code>U</code> у <code>Map</code>/<code>Reduce</code>
+          и есть суть: тип на выходе может отличаться от входа, и всё это проверено
+          компилятором. <code>U</code> обычно выводится из переданной функции.
+        </figcaption>
+      </figure>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ── 07 Лестница ограничений ── -->
+    <section id="lestnica">
+      <span class="eyebrow"><span class="num">07</span> Лестница ограничений</span>
+      <h2>Чем строже — тем больше можно внутри</h2>
+      <p>
+        Ограничение — это <b>контракт</b> о том, что разрешено делать с
+        <code>T</code>. Поднимаясь по лестнице, мы получаем больше операций
+        (<code>==</code>, потом <code>+ - *</code>, потом <code>&lt; &gt;</code>),
+        но круг подходящих типов сужается. Правило простое: <b>бери минимально
+        необходимое</b>.
+      </p>
+
+      <figure class="diagram">
+        <div class="scroll">
+          <svg viewBox="0 0 880 320" role="img"
+               aria-label="Лестница: any внизу, выше comparable, выше Number, выше Ordered; вверх больше операций, уже типы">
+            <!-- ступени -->
+            <rect x="60" y="248" width="700" height="48" rx="8" fill="color-mix(in oklab, var(--c-any) 16%, var(--surface))" stroke="var(--c-any)" stroke-width="1.5"/>
+            <text class="lbl b" x="80" y="272" fill="var(--c-any)">any</text>
+            <text class="lbl sm" x="150" y="272">любой тип · можно хранить/передавать</text>
+            <text class="lbl sm" x="560" y="272" fill="var(--muted)">Stack, Queue, Map/Filter/Reduce</text>
+
+            <rect x="120" y="188" width="640" height="48" rx="8" fill="color-mix(in oklab, var(--c-comp) 16%, var(--surface))" stroke="var(--c-comp)" stroke-width="1.5"/>
+            <text class="lbl b" x="140" y="212" fill="var(--c-comp)">comparable</text>
+            <text class="lbl sm" x="250" y="212">+ оператор ==</text>
+            <text class="lbl sm" x="560" y="212" fill="var(--muted)">Set, Index, ключ карты</text>
+
+            <rect x="180" y="128" width="580" height="48" rx="8" fill="color-mix(in oklab, var(--c-num) 16%, var(--surface))" stroke="var(--c-num)" stroke-width="1.5"/>
+            <text class="lbl b" x="200" y="152" fill="var(--c-num)">Number (union)</text>
+            <text class="lbl sm" x="330" y="152">+ арифметика + - *</text>
+            <text class="lbl sm" x="560" y="152" fill="var(--muted)">Sum · ~int | ~float64</text>
+
+            <rect x="240" y="68" width="520" height="48" rx="8" fill="color-mix(in oklab, var(--c-num) 30%, var(--surface))" stroke="var(--c-num)" stroke-width="2"/>
+            <text class="lbl b" x="260" y="92" fill="var(--c-num)">cmp.Ordered</text>
+            <text class="lbl sm" x="380" y="92">+ порядок &lt; &gt;</text>
+            <text class="lbl sm" x="560" y="92" fill="var(--muted)">SortedKeys · slices.Sort</text>
+
+            <!-- стрелки-подписи по бокам -->
+            <text class="lbl sm" x="795" y="92"  text-anchor="start" fill="var(--c-num)">↑ больше операций</text>
+            <text class="lbl sm" x="795" y="272" text-anchor="start" fill="var(--c-any)">↓ шире круг типов</text>
+          </svg>
+        </div>
+        <figcaption>
+          Внизу <code>any</code> подходит любому типу, но внутри с ним почти ничего
+          не сделать. Каждая ступень добавляет операцию и одновременно отсекает
+          часть типов (у <code>Ordered</code> уже нет, например, <code>bool</code>
+          или структур).
+        </figcaption>
+      </figure>
+
+      <div class="note num">
+        <span class="ic">🔢</span>
+        <p><b>Тильда <code>~</code> в union.</b> <code>Number</code> перечисляет
+        <code>~int | ~float64 | …</code>. <code>~int</code> значит «<code>int</code>
+        и любой тип с <b>базой</b> <code>int</code>» — поэтому объявленный
+        <code>type Age int</code> тоже проходит в <code>Sum</code>. Без тильды
+        (<code>int</code>) подошёл бы только сам <code>int</code>, но не
+        <code>Age</code>.</p>
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ── 08 Грабли ── -->
+    <section id="grabli">
+      <span class="eyebrow"><span class="num">08</span> Грабли дженериков</span>
+      <h2>Что не компилируется и что паникует</h2>
+      <p>
+        Часть ошибок дженериков ловит компилятор (это хорошо — до рантайма не
+        дойдёт), но пара ловушек остаётся на рантайм. Ниже — самые частые в этом
+        проекте.
+      </p>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>① Set[T any] <span class="tag danger">компиляция</span></h3>
+          <p>Ключу карты нужен <code>==</code>. <code>Set[T any]</code> →
+          <code>T does not satisfy comparable</code>. Ставь
+          <code>T comparable</code>.</p>
+        </div>
+        <div class="card">
+          <h3>② a + b под [T any] <span class="tag danger">компиляция</span></h3>
+          <p>Компилятор не знает, есть ли у <code>T</code> оператор <code>+</code>.
+          Нужен union-constraint (<code>Number</code>), либо
+          <code>cmp.Ordered</code> для <code>&lt; &gt;</code>.</p>
+        </div>
+        <div class="card">
+          <h3>③ Add в nil-множество <span class="tag danger">рантайм</span></h3>
+          <p>Нулевое значение <code>Set[T]</code> — <code>nil</code>-карта.
+          <code>Has</code>/<code>Remove</code> на ней ок, а <code>Add</code>
+          <b>паникует</b>. Создавай через <code>NewSet</code>/<code>make</code>.</p>
+        </div>
+        <div class="card">
+          <h3>④ Метод со своим [U] <span class="tag comp">компиляция</span></h3>
+          <p>Параметр типа вводит только сам тип. Нужен новый <code>U</code> —
+          это обычная функция (<code>Map</code>), а не метод
+          <code>Stack.MapTo[U]</code>.</p>
+        </div>
+        <div class="card">
+          <h3>⑤ Pop/Dequeue пустого <span class="tag any">контракт</span></h3>
+          <p>Возвращай <code>(нулевое значение, false)</code>, а не панику. Всегда
+          отдавай второй <code>bool</code> и проверяй его у вызывающего.</p>
+        </div>
+        <div class="card">
+          <h3>⑥ Дженерики ради дженериков <span class="tag comp">стиль</span></h3>
+          <p>Если хватает интерфейса (<code>io.Writer</code>,
+          <code>fmt.Stringer</code>) — бери его, он проще. Дженерики — когда важно
+          <b>сохранить конкретный тип</b> на входе и выходе.</p>
+        </div>
+      </div>
+
+      <div class="note good">
+        <span class="ic">🏁</span>
+        <p><b>Проверь себя инструментами.</b> Большинство ошибок дженериков — на
+        этапе компиляции, поэтому первый рубеж это <code>go build</code>. Дальше:</p>
+        <p style="margin-top:8px" class="mono">go vet ./...&nbsp;&nbsp;·&nbsp;&nbsp;go test -race ./...</p>
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ── 09 Трасса ── -->
+    <section id="trassa">
+      <span class="eyebrow"><span class="num">09</span> Живая трасса</span>
+      <h2>Как это выглядит при запуске</h2>
+      <p>
+        Реальный вывод <code>go run .</code>. Множество печатается через
+        <code>SortedKeys</code>, поэтому порядок <b>детерминирован</b> несмотря на
+        случайный обход карты.
+      </p>
+      <div class="terminal">
+        <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span>&nbsp;go run .</div>
+        <div class="body"><pre><span class="t-sys">=== generic-collections: типобезопасные коллекции на дженериках ===</span>
+
+<span class="t-any">--- 1. Stack[int]: кладём наверх, снимаем сверху (LIFO) ---</span>
+пустой стек: Pop вернул ok=false (а не панику)   <span class="annot">← (нулевое значение, false)</span>
+Push(10) → длина 1
+Push(20) → длина 2
+Push(30) → длина 3
+Peek() = 30 (вершина, не снимая)
+Pop() = 30
+Pop() = 20
+Pop() = 10                                       <span class="annot">← LIFO: обратный порядок</span>
+
+<span class="t-any">--- 2. Queue[string]: кладём в конец, берём с начала (FIFO) ---</span>
+в очереди 3
+Dequeue() = Аня
+Dequeue() = Борис
+Dequeue() = Вера                                 <span class="annot">← FIFO: прямой порядок</span>
+
+<span class="t-comp">--- 3. Set[string]: уникальные значения, быстрый Has ---</span>
+множество: [груша слива яблоко] (размер 3, дубликат «яблоко» отброшен)
+Has(груша) = true, Has(банан) = false
+после Remove(груша): [слива яблоко]
+A=[1 2 3] B=[2 3 4] → Union=[1 2 3 4], Intersect=[2 3]
+Set[Point]: размер 2 (два одинаковых (1,1) схлопнулись), Has((2,2)) = true  <span class="annot">← своя структура тоже comparable</span>
+
+<span class="t-any">--- 4. Map / Filter / Reduce над []T ---</span>
+Map (в квадрат):   [1 2 3 4 5 6] → [1 4 9 16 25 36]
+Filter (чётные):   [1 2 3 4 5 6] → [2 4 6]
+Reduce (сумма):    [1 2 3 4 5 6] → 21
+Map (int→string):  #1 #2 #3 #4 #5 #6              <span class="annot">← Map поменял тип []int → []string</span>
+Map ([]Point→[]X): [1 2]
+
+<span class="t-num">--- 5. Ограничения-union: Sum (Number) работает с любыми числами ---</span>
+Sum([]int)     = 10
+Sum([]float64) = 4.0
+Index([b c d], "c") = 1
+
+<span class="t-sys">✅ Готово — ни одного interface{} и ни одного приведения типа</span></pre></div>
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- ── 10 Файлы ── -->
+    <section id="fayly">
+      <span class="eyebrow"><span class="num">10</span> Карта файлов</span>
+      <h2>Где что искать</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Файл</th><th>Что внутри</th><th>Ключевое</th></tr></thead>
+          <tbody>
+            <tr><td class="file-cell">stack.go</td><td>Stack[T any]</td><td>LIFO · Push/Pop/Peek/Len · (T, bool)</td></tr>
+            <tr><td class="file-cell">queue.go</td><td>Queue[T any]</td><td>FIFO · Enqueue/Dequeue/Len</td></tr>
+            <tr><td class="file-cell">set.go</td><td>Set[T comparable]</td><td>map[T]struct{} · Add/Has/Remove · Union/Intersect</td></tr>
+            <tr><td class="file-cell">slices.go</td><td>функции + constraints</td><td>Map/Filter/Reduce · Sum(Number) · SortedKeys(Ordered)</td></tr>
+            <tr><td class="file-cell">main.go</td><td>демо-сценарий</td><td>всё по шагам: int, string, Point</td></tr>
+            <tr><td class="file-cell">stack_test.go</td><td>тесты стека</td><td>LIFO, пустой Pop, тип сохраняется</td></tr>
+            <tr><td class="file-cell">queue_test.go</td><td>тесты очереди</td><td>FIFO, пустой Dequeue</td></tr>
+            <tr><td class="file-cell">set_test.go</td><td>тесты множества</td><td>дедуп, Union/Intersect, паника nil-карты</td></tr>
+            <tr><td class="file-cell">slices_test.go</td><td>тесты функций</td><td>Map меняет тип, Sum с ~int (Age), SortedKeys</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <footer>
+        <p>Сгенерировано как учебная визуализация к проекту
+        <code>generic-collections</code>. Запуск: <code>go run .</code> · проверка:
+        <code>go vet ./...</code> и <code>go test -race ./...</code>. Открой
+        <code>.go</code>-файлы рядом — там подробные комментарии к каждому приёму.
+        Исходное задание — в <code>docs/05-generic-collections-generics.md</code>.</p>
+      </footer>
+    </section>
+  </main>
+</div>
+
+<script>
+  // Переключатель темы: запоминаем выбор, перекрываем системную тему.
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById('themeToggle');
+    var icon = document.getElementById('themeIcon');
+    var label = document.getElementById('themeLabel');
+
+    function apply(theme) {
+      if (theme === 'light' || theme === 'dark') {
+        root.setAttribute('data-theme', theme);
+        icon.textContent = theme === 'dark' ? '☾' : '☀';
+        label.textContent = theme === 'dark' ? 'тёмная' : 'светлая';
+      } else {
+        root.removeAttribute('data-theme');
+        icon.textContent = '◐';
+        label.textContent = 'система';
+      }
+    }
+
+    var saved = null;
+    try { saved = localStorage.getItem('generic-collections-theme'); } catch (e) {}
+    apply(saved);
+
+    btn.addEventListener('click', function () {
+      var cur = root.getAttribute('data-theme');
+      // цикл: система → светлая → тёмная → система
+      var next = cur === 'light' ? 'dark' : (cur === 'dark' ? null : 'light');
+      apply(next);
+      try {
+        if (next) localStorage.setItem('generic-collections-theme', next);
+        else localStorage.removeItem('generic-collections-theme');
+      } catch (e) {}
+    });
+  })();
+
+  // Scrollspy для оглавления слева.
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail a'));
+    var map = {};
+    links.forEach(function (a) { map[a.getAttribute('href').slice(1)] = a; });
+    var sections = links
+      .map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); })
+      .filter(Boolean);
+
+    if (!('IntersectionObserver' in window) || !sections.length) return;
+
+    var current = null;
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) {
+          if (current) current.classList.remove('active');
+          var a = map[en.target.id];
+          if (a) { a.classList.add('active'); current = a; }
+        }
+      });
+    }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 });
+
+    sections.forEach(function (s) { io.observe(s); });
+  })();
+</script>
+</body>
+</html>
