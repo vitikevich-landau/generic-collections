@@ -1,8 +1,22 @@
-// Package collections provides small, type-safe, allocation-conscious generic
-// collections and slice helpers.
+// Пакет collections предоставляет небольшой набор типобезопасных
+// generic-коллекций и функций над срезами, бережно относящихся к аллокациям.
 //
-// Stack and Queue have useful zero values. Set is backed by map[T]struct{} and
-// must be initialized before Add. The collection types are intentionally not
-// synchronized; callers that share them across goroutines must provide their
-// own synchronization.
+// Состав пакета:
+//
+//   - [Stack] — стек (LIFO) поверх среза;
+//   - [Queue] — динамически растущая очередь (FIFO) на кольцевом буфере;
+//   - [Set] — множество на основе map[T]struct{};
+//   - [Map], [Filter], [Reduce], [Sum], а также «append»-варианты [AppendMap]
+//     и [AppendFilter] для переиспользования уже выделенной памяти.
+//
+// Нулевые значения [Stack] и [Queue] сразу готовы к работе — вызывать
+// конструктор не обязательно, он нужен лишь для предварительного выделения
+// памяти. [Set] построен на map[T]struct{}, поэтому перед первым вызовом Add
+// множество необходимо создать через [NewSet], [NewSetWithCapacity] или make:
+// запись в nil-карту вызывает панику.
+//
+// Типы коллекций намеренно не синхронизированы: внутри нет ни мьютексов, ни
+// атомарных операций — за них не приходится платить в однопоточном коде. Если
+// коллекция используется несколькими goroutine одновременно, синхронизацию
+// обязан обеспечить вызывающий код.
 package collections

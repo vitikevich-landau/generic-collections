@@ -1,20 +1,37 @@
 package collections
 
+// minQueueCapacity — минимальный размер буфера очереди. Слишком маленький
+// стартовый буфер приводил бы к череде удвоений на первых же вставках.
 const minQueueCapacity = 8
 
-// Queue is a dynamically growing FIFO ring buffer. Its zero value is ready to
-// use. A Queue must not be copied after first use and is not safe for
-// concurrent use.
+// Queue — очередь с дисциплиной FIFO (first in, first out): кладём в конец,
+// забираем с начала. Реализована как кольцевой буфер (ring buffer): вместо
+// сдвига всех элементов при извлечении сдвигается только индекс головы, а
+// хвост при достижении конца буфера «заворачивается» в его начало.
+//
+// Благодаря этому [Queue.Dequeue] стоит O(1), а не O(n), как наивная
+// реализация через q.items = q.items[1:], которая к тому же безвозвратно теряет
+// начало backing array.
+//
+// Длина буфера всегда является степенью двойки — это позволяет заменить
+// дорогое взятие остатка по модулю на побитовое И: x & (len-1).
+//
+// Нулевое значение готово к работе: буфер выделяется при первой вставке.
+// Очередь нельзя копировать после первого использования (за этим следит поле
+// noCopy и go vet) и нельзя использовать конкурентно.
 type Queue[T any] struct {
 	noCopy noCopy
-	buf    []T
-	head   int
-	size   int
+	buf    []T // кольцевой буфер, len(buf) — степень двойки либо 0
+	head   int // индекс первого элемента в buf
+	size   int // количество занятых слотов; хвост вычисляется как head+size
 }
 
-// NewQueue returns an empty queue with capacity rounded up to a power of two,
-// with a minimum of 8. A capacity of 0 allocates no buffer until the first
-// Enqueue.
+// NewQueue возвращает пустую очередь с ёмкостью, округлённой вверх до степени
+// двойки, но не меньше minQueueCapacity (8). При capacity == 0 буфер не
+// выделяется вовсе — это произойдёт при первом [Queue.Enqueue].
+//
+// Паникует при отрицательной capacity и при capacity, не представимой степенью
+// двойки в пределах int.
 func NewQueue[T any](capacity int) *Queue[T] {
 	capacity = queueCapacity(capacity)
 	if capacity == 0 {
@@ -23,18 +40,28 @@ func NewQueue[T any](capacity int) *Queue[T] {
 	return &Queue[T]{buf: make([]T, capacity)}
 }
 
-// Enqueue adds v to the back of the queue.
+// Enqueue добавляет v в конец очереди. Амортизированное O(1): изредка
+// происходит удвоение буфера с копированием элементов.
 func (q *Queue[T]) Enqueue(v T) {
+	// Буфер заполнен (в том числе когда он ещё не выделен и len == size == 0).
 	if q.size == len(q.buf) {
 		q.grow()
 	}
+
+	// Позиция за последним элементом. Побитовое И с len(buf)-1 эквивалентно
+	// остатку от деления на len(buf) — и обеспечивает «заворот» в начало
+	// буфера — именно потому, что длина является степенью двойки.
 	tail := (q.head + q.size) & (len(q.buf) - 1)
 	q.buf[tail] = v
 	q.size++
 }
 
-// Dequeue removes and returns the front item. The boolean result is false when
-// the queue is empty. The vacated slot is cleared so it cannot retain pointers.
+// Dequeue извлекает и возвращает элемент из начала очереди. Второй результат
+// равен false, если очередь пуста, — вместо паники возвращается пара
+// (нулевое значение, false).
+//
+// Освободившийся слот обнуляется, чтобы буфер не удерживал ссылку на извлечённое
+// значение и сборщик мусора мог его освободить.
 func (q *Queue[T]) Dequeue() (T, bool) {
 	if q.size == 0 {
 		var zero T
@@ -42,18 +69,23 @@ func (q *Queue[T]) Dequeue() (T, bool) {
 	}
 
 	v := q.buf[q.head]
+
 	var zero T
 	q.buf[q.head] = zero
 	q.head = (q.head + 1) & (len(q.buf) - 1)
 	q.size--
+
+	// Очередь опустела — возвращаем голову в начало буфера. Это не обязательно
+	// для корректности, но сохраняет непрерывность следующей серии вставок и
+	// избавляет grow от лишнего разбора случая с заворотом.
 	if q.size == 0 {
 		q.head = 0
 	}
 	return v, true
 }
 
-// Peek returns the front item without removing it. The boolean result is false
-// when the queue is empty.
+// Peek возвращает элемент из начала очереди, не извлекая его. Второй результат
+// равен false, если очередь пуста.
 func (q *Queue[T]) Peek() (T, bool) {
 	if q.size == 0 {
 		var zero T
@@ -62,44 +94,56 @@ func (q *Queue[T]) Peek() (T, bool) {
 	return q.buf[q.head], true
 }
 
-// Len returns the number of items in the queue.
+// Len возвращает количество элементов в очереди.
 func (q *Queue[T]) Len() int {
 	return q.size
 }
 
-// Cap returns the queue's current storage capacity.
+// Cap возвращает текущую ёмкость буфера — сколько элементов очередь может
+// принять до следующего удвоения.
 func (q *Queue[T]) Cap() int {
 	return len(q.buf)
 }
 
-// IsEmpty reports whether the queue contains no items.
+// IsEmpty сообщает, пуста ли очередь.
 func (q *Queue[T]) IsEmpty() bool {
 	return q.size == 0
 }
 
-// Clear removes all items while retaining allocated storage for reuse.
+// Clear удаляет все элементы, сохраняя выделенный буфер для повторного
+// использования: ёмкость после вызова не меняется.
+//
+// Занятые слоты обнуляются, чтобы буфер не удерживал ссылочные значения.
 func (q *Queue[T]) Clear() {
 	if q.size == 0 {
 		return
 	}
 
+	// Занятые слоты лежат либо одним непрерывным участком, либо двумя — если
+	// очередь «завернулась» через конец буфера. Обнуляем ровно эти участки,
+	// а не весь буфер: свободные слоты уже обнулены при извлечении.
 	end := q.head + q.size
 	if end <= len(q.buf) {
 		clear(q.buf[q.head:end])
 	} else {
-		clear(q.buf[q.head:])
-		clear(q.buf[:end-len(q.buf)])
+		clear(q.buf[q.head:])         // хвост буфера — от головы до конца
+		clear(q.buf[:end-len(q.buf)]) // и начало буфера — до логического конца
 	}
 	q.head = 0
 	q.size = 0
 }
 
+// grow удваивает буфер очереди (а для ещё не выделенного буфера — создаёт его
+// размером minQueueCapacity) и переносит элементы в начало нового буфера,
+// делая их снова непрерывными.
+//
+// Паникует, если удвоение не представимо в int.
 func (q *Queue[T]) grow() {
 	capacity := minQueueCapacity
 	if len(q.buf) != 0 {
 		maxInt := int(^uint(0) >> 1)
 		if len(q.buf) > maxInt/2 {
-			panic("collections: queue capacity overflow")
+			panic("collections: переполнение ёмкости очереди")
 		}
 		capacity = len(q.buf) * 2
 	}
@@ -107,19 +151,30 @@ func (q *Queue[T]) grow() {
 	buf := make([]T, capacity)
 	if q.size != 0 {
 		if q.head+q.size <= len(q.buf) {
+			// Элементы лежат непрерывно — хватает одного копирования.
 			copy(buf, q.buf[q.head:q.head+q.size])
 		} else {
+			// Очередь завёрнута: сначала переносим часть от головы до конца
+			// буфера, затем — оставшийся кусок из его начала.
 			n := copy(buf, q.buf[q.head:])
 			copy(buf[n:], q.buf[:q.size-n])
 		}
 	}
 	q.buf = buf
+
+	// После переноса элементы всегда начинаются с нулевого индекса.
 	q.head = 0
 }
 
+// queueCapacity округляет запрошенную ёмкость вверх до степени двойки, но не
+// меньше minQueueCapacity. Нулевой запрос означает «не выделять буфер» и
+// возвращается как есть.
+//
+// Паникует при отрицательном запросе и при запросе, который невозможно округлить
+// вверх, не выйдя за пределы int.
 func queueCapacity(requested int) int {
 	if requested < 0 {
-		panic("collections: negative queue capacity")
+		panic("collections: отрицательная ёмкость очереди")
 	}
 	if requested == 0 {
 		return 0
@@ -128,8 +183,11 @@ func queueCapacity(requested int) int {
 	capacity := minQueueCapacity
 	maxInt := int(^uint(0) >> 1)
 	for capacity < requested {
+		// Проверяем возможность удвоения до самого удвоения: capacity *= 2
+		// при слишком большом capacity дало бы отрицательное значение
+		// вместо ошибки, и цикл стал бы бесконечным.
 		if capacity > maxInt/2 {
-			panic("collections: queue capacity overflow")
+			panic("collections: переполнение ёмкости очереди")
 		}
 		capacity *= 2
 	}

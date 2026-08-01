@@ -1,25 +1,49 @@
+# Непрерывная интеграция: форматирование, тесты, статический анализ и фаззинг.
 name: CI
 
+# Запускается на каждый push и на каждый pull request.
 on:
   push:
   pull_request:
 
+# Минимально необходимые права: workflow только читает репозиторий.
 permissions:
   contents: read
 
 jobs:
   test:
+    name: Тесты
     strategy:
+      # Матрица версий: проверяем и на текущей версии Go, и на следующей,
+      # чтобы заранее ловить несовместимости.
       matrix:
         go-version: ["1.25.x", "1.26.x"]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - name: Получить исходный код
+        uses: actions/checkout@v7
+
+      - name: Установить Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
+          # Кеш модулей не нужен: у проекта нет внешних зависимостей.
           cache: false
-      - run: test -z "$(gofmt -l .)"
-      - run: go test -race ./...
-      - run: go vet ./...
-      - run: go test -run '^$' -fuzz FuzzQueueMatchesSlice -fuzztime 30s .
+
+      # gofmt -l выводит список неотформатированных файлов. Пустой вывод
+      # означает, что форматирование в порядке.
+      - name: Проверить форматирование
+        run: test -z "$(gofmt -l .)"
+
+      # Флаг -race включает детектор гонок: коллекции не синхронизированы,
+      # и важно, чтобы сами тесты не полагались на конкурентный доступ.
+      - name: Прогнать тесты с детектором гонок
+        run: go test -race ./...
+
+      - name: Статический анализ
+        run: go vet ./...
+
+      # Фаззинг очереди: -run '^$' отключает обычные тесты, чтобы всё время
+      # ушло на фаззинг. 30 секунд — компромисс между покрытием и временем CI.
+      - name: Фаззинг очереди
+        run: go test -run '^$' -fuzz FuzzQueueMatchesSlice -fuzztime 30s .

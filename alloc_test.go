@@ -2,33 +2,58 @@ package collections
 
 import "testing"
 
-// These tests enforce the allocation invariants documented in the README:
-// a warmed-up queue's Enqueue/Dequeue pairs are allocation-free, and Map and
-// Filter make at most one allocation for the result.
+// Тесты в этом файле проверяют не корректность, а инварианты по аллокациям,
+// заявленные в README: у прогретой очереди пары Enqueue/Dequeue не выделяют
+// память вовсе, а Map и Filter делают не более одной аллокации под результат.
+//
+// Инструмент — testing.AllocsPerRun: он прогоняет функцию заданное число раз и
+// возвращает среднее количество аллокаций за прогон. Такие проверки ловят
+// регрессии производительности, которые обычные тесты пропускают: код остаётся
+// корректным, просто начинает мусорить.
 
+// TestQueueSteadyStateDoesNotAllocate проверяет, что в установившемся режиме
+// очередь не выделяет память.
+//
+// Это ключевое свойство кольцевого буфера: пока ёмкости хватает, Enqueue пишет
+// в уже выделенный слот, а Dequeue лишь сдвигает индекс головы — расти буферу
+// не нужно, сколько бы пар операций ни выполнялось.
 func TestQueueSteadyStateDoesNotAllocate(t *testing.T) {
 	q := NewQueue[int](64)
+
+	// «Прогрев»: буфер уже выделен, и половина его заполнена, чтобы измерять
+	// именно установившийся режим, а не первые вставки.
 	for i := 0; i < 32; i++ {
 		q.Enqueue(i)
 	}
+
+	// Размер очереди в цикле не меняется, значит роста буфера быть не должно.
 	allocs := testing.AllocsPerRun(1000, func() {
 		q.Enqueue(1)
 		q.Dequeue()
 	})
 	if allocs != 0 {
-		t.Fatalf("steady-state Enqueue/Dequeue = %.1f allocs per pair, want 0", allocs)
+		t.Fatalf("пара Enqueue/Dequeue в установившемся режиме = %.1f аллокаций, ожидалось 0", allocs)
 	}
 }
 
+// TestMapFilterAllocateAtMostOnce проверяет, что Map и Filter выделяют память
+// ровно один раз — под результирующий срез.
+//
+// Обе функции резервируют результат сразу под длину входа (для Filter это
+// худший случай, когда проходят все элементы), поэтому append внутри цикла
+// никогда не вызывает перевыделения.
 func TestMapFilterAllocateAtMostOnce(t *testing.T) {
 	in := []int{1, 2, 3, 4, 5, 6, 7, 8}
+
+	// Функции объявлены переменными заранее, чтобы их создание не попало в
+	// измеряемый участок кода.
 	double := func(v int) int { return v * 2 }
 	even := func(v int) bool { return v%2 == 0 }
 
 	if allocs := testing.AllocsPerRun(100, func() { Map(in, double) }); allocs > 1 {
-		t.Fatalf("Map = %.1f allocs, want at most 1", allocs)
+		t.Fatalf("Map = %.1f аллокаций, ожидалось не более 1", allocs)
 	}
 	if allocs := testing.AllocsPerRun(100, func() { Filter(in, even) }); allocs > 1 {
-		t.Fatalf("Filter = %.1f allocs, want at most 1", allocs)
+		t.Fatalf("Filter = %.1f аллокаций, ожидалось не более 1", allocs)
 	}
 }

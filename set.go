@@ -1,11 +1,23 @@
 package collections
 
-// Set is a hash set for comparable values. A nil Set supports reads and
-// removals, but Add requires a Set created with NewSet, NewSetWithCapacity, or
-// make. Set is not safe for concurrent use.
+// Set — хеш-множество для сравнимых значений, построенное на map[T]struct{}.
+// Пустая структура struct{} не занимает памяти, поэтому хранится фактически
+// только сам ключ, а наличие ключа и означает «элемент есть».
+//
+// Ограничение comparable обязательно: ключ карты должен поддерживать ==,
+// поэтому Set[T any] не скомпилируется.
+//
+// Нулевое значение Set[T] — это nil-карта. Чтение ([Set.Has], [Set.Len],
+// [Set.IsEmpty]), а также [Set.Remove] и [Set.Clear] на ней безопасны, но
+// [Set.Add] паникует: «assignment to entry in nil map». Перед добавлением
+// множество нужно создать через [NewSet], [NewSetWithCapacity] или make.
+//
+// Set не предназначен для конкурентного использования.
 type Set[T comparable] map[T]struct{}
 
-// NewSet creates a set containing values.
+// NewSet создаёт множество, содержащее переданные значения. Дубликаты
+// схлопываются, поэтому длина результата может быть меньше числа аргументов.
+// Вызов без аргументов возвращает пустое, но полностью рабочее множество.
 func NewSet[T comparable](values ...T) Set[T] {
 	s := make(Set[T], len(values))
 	for _, v := range values {
@@ -14,43 +26,55 @@ func NewSet[T comparable](values ...T) Set[T] {
 	return s
 }
 
-// NewSetWithCapacity creates an empty set preallocated for capacity values.
+// NewSetWithCapacity создаёт пустое множество с заранее выделенным местом под
+// capacity значений. Это избавляет от перехеширований при массовом наполнении,
+// когда ожидаемый размер известен заранее.
 func NewSetWithCapacity[T comparable](capacity int) Set[T] {
 	return make(Set[T], capacity)
 }
 
-// Add inserts v into the set.
+// Add добавляет v во множество. Повторное добавление того же значения ничего не
+// меняет. Вызов на nil-множестве паникует — см. комментарий к типу [Set].
+//
+// Ресивер здесь — значение, а не указатель: карта сама по себе ссылочный тип,
+// и изменения через копию ресивера видны вызывающему коду.
 func (s Set[T]) Add(v T) {
 	s[v] = struct{}{}
 }
 
-// Has reports whether v is in the set.
+// Has сообщает, содержится ли v во множестве. В среднем O(1).
 func (s Set[T]) Has(v T) bool {
 	_, ok := s[v]
 	return ok
 }
 
-// Remove deletes v from the set.
+// Remove удаляет v из множества. Удаление отсутствующего значения — не ошибка,
+// как и вызов на nil-множестве.
 func (s Set[T]) Remove(v T) {
 	delete(s, v)
 }
 
-// Len returns the number of values in the set.
+// Len возвращает количество значений во множестве.
 func (s Set[T]) Len() int {
 	return len(s)
 }
 
-// IsEmpty reports whether the set contains no values.
+// IsEmpty сообщает, пусто ли множество.
 func (s Set[T]) IsEmpty() bool {
 	return len(s) == 0
 }
 
-// Clear removes all values while retaining allocated storage for reuse.
+// Clear удаляет все значения, сохраняя уже выделенную под карту память для
+// повторного использования.
 func (s Set[T]) Clear() {
 	clear(s)
 }
 
-// Clone returns a shallow copy of s.
+// Clone возвращает поверхностную копию множества: сама карта новая, но значения
+// копируются как есть — если T является указателем, копия и оригинал будут
+// ссылаться на одни и те же объекты.
+//
+// Для nil-множества возвращается nil, чтобы «нулевость» не терялась.
 func (s Set[T]) Clone() Set[T] {
 	if s == nil {
 		return nil
@@ -62,8 +86,11 @@ func (s Set[T]) Clone() Set[T] {
 	return out
 }
 
-// Union returns a new set containing values present in either set.
+// Union возвращает новое множество со значениями, присутствующими хотя бы в
+// одном из двух множеств. Исходные множества не изменяются.
 func (s Set[T]) Union(other Set[T]) Set[T] {
+	// len(s)+len(other) — верхняя оценка размера результата: при пересечении
+	// множеств он окажется меньше, но лишних перехеширований не будет.
 	out := make(Set[T], len(s)+len(other))
 	for v := range s {
 		out[v] = struct{}{}
@@ -74,8 +101,13 @@ func (s Set[T]) Union(other Set[T]) Set[T] {
 	return out
 }
 
-// Intersect returns a new set containing values present in both sets. It walks
-// the smaller input so highly skewed set sizes remain efficient.
+// Intersect возвращает новое множество со значениями, присутствующими в обоих
+// множествах. Исходные множества не изменяются.
+//
+// Обход всегда идёт по меньшему множеству, а проверка делается по большему,
+// поэтому сложность — O(min(len(s), len(other))) проверок. Это принципиально
+// при сильно различающихся размерах: пересечь множество из 100 000 элементов с
+// множеством из 64 стоит 64 проверки, а не 100 000.
 func (s Set[T]) Intersect(other Set[T]) Set[T] {
 	if len(s) > len(other) {
 		s, other = other, s
@@ -90,7 +122,12 @@ func (s Set[T]) Intersect(other Set[T]) Set[T] {
 	return out
 }
 
-// Difference returns a new set containing values present in s but not other.
+// Difference возвращает новое множество со значениями, которые есть в s, но
+// отсутствуют в other. Операция несимметрична: a.Difference(b) и b.Difference(a)
+// в общем случае дают разные результаты. Исходные множества не изменяются.
+//
+// Здесь, в отличие от [Set.Intersect], поменять множества местами нельзя —
+// обходить нужно именно s.
 func (s Set[T]) Difference(other Set[T]) Set[T] {
 	out := make(Set[T], len(s))
 	for v := range s {
