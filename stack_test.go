@@ -7,6 +7,9 @@ func TestStackZeroValueAndLIFO(t *testing.T) {
 	if _, ok := s.Pop(); ok {
 		t.Fatal("Pop on an empty stack returned ok=true")
 	}
+	if got, ok := s.Peek(); ok || got != 0 {
+		t.Fatalf("Peek on empty stack = (%d, %v), want (0, false)", got, ok)
+	}
 
 	for _, v := range []int{1, 2, 3} {
 		s.Push(v)

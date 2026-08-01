@@ -12,7 +12,9 @@ type Queue[T any] struct {
 	size   int
 }
 
-// NewQueue returns an empty queue with capacity rounded up to a power of two.
+// NewQueue returns an empty queue with capacity rounded up to a power of two,
+// with a minimum of 8. A capacity of 0 allocates no buffer until the first
+// Enqueue.
 func NewQueue[T any](capacity int) *Queue[T] {
 	capacity = queueCapacity(capacity)
 	if capacity == 0 {

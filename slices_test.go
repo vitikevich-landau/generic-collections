@@ -95,3 +95,15 @@ func TestCompatibilityHelpers(t *testing.T) {
 		t.Fatalf("SortedKeys = %v, want %v", got, want)
 	}
 }
+
+func TestKeysNilForEmptyMaps(t *testing.T) {
+	if Keys[string, int](nil) != nil {
+		t.Fatal("Keys(nil) did not return nil")
+	}
+	if Keys(map[string]int{}) != nil {
+		t.Fatal("Keys of an empty map did not return nil")
+	}
+	if SortedKeys(map[string]int{}) != nil {
+		t.Fatal("SortedKeys of an empty map did not return nil")
+	}
+}
