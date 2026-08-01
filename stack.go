@@ -1,55 +1,41 @@
-package main
+package collections
 
-// ─────────────────────────────────────────────────────────────────────────────
-// stack.go — СТЕК на дженериках. Стек живёт по принципу LIFO (last in, first
-// out): что положили последним — то и снимем первым. Как стопка тарелок.
-//
-// Главная идея темы: тип элемента задаётся ПАРАМЕТРОМ ТИПА [T any], а не
-// хранится как interface{}. Поэтому Stack[int] умеет держать только int, и Pop
-// сразу отдаёт int — без приведения v.(int) и без риска паники в рантайме.
-//
-//	var s Stack[int]     // конкретный тип «стек интов»
-//	s.Push(42)
-//	v, ok := s.Pop()     // v уже int, ok — был ли элемент
-//
-// [T any] — «параметр типа». any это псевдоним interface{}, то есть ограничение
-// «любой тип». Внутри структуры T ведёт себя как обычный тип.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Stack — стек значений одного типа T. Нулевое значение (var s Stack[int])
-// сразу рабочее: items == nil, а append к nil-срезу создаёт новый срез. Поэтому,
-// в отличие от Set (это карта), конструктор здесь не нужен.
+// Stack is a LIFO collection. Its zero value is ready to use. A Stack must not
+// be copied after first use and is not safe for concurrent use.
 type Stack[T any] struct {
-	items []T
+	noCopy noCopy
+	items  []T
 }
 
-// Push кладёт значение наверх стека. Ресивер — УКАЗАТЕЛЬ (*Stack[T]), потому что
-// метод меняет поле items: будь ресивер значением, append изменил бы копию, а
-// оригинал остался бы пустым.
+// NewStack returns an empty stack with space preallocated for capacity items.
+func NewStack[T any](capacity int) *Stack[T] {
+	return &Stack[T]{items: make([]T, 0, capacity)}
+}
+
+// Push adds v to the top of the stack.
 func (s *Stack[T]) Push(v T) {
 	s.items = append(s.items, v)
 }
 
-// Pop снимает верхний элемент. Возвращает ДВА значения: сам элемент и bool —
-// «был ли он». Если стек пуст, вернём нулевое значение типа T и false, а НЕ
-// панику: вызывающий обязан проверить второй результат.
-//
-// var zero T — так получают нулевое значение параметра-типа: для int это 0, для
-// string — "", для указателя — nil. Другого способа «придумать пустое T» нет,
-// ведь на этапе написания мы не знаем, каким конкретно T окажется.
+// Pop removes and returns the top item. The boolean result is false when the
+// stack is empty. The vacated slot is cleared so it cannot keep references
+// alive through the backing array.
 func (s *Stack[T]) Pop() (T, bool) {
 	if len(s.items) == 0 {
 		var zero T
 		return zero, false
 	}
+
 	last := len(s.items) - 1
 	v := s.items[last]
-	s.items = s.items[:last] // отрезаем последний элемент
+	var zero T
+	s.items[last] = zero
+	s.items = s.items[:last]
 	return v, true
 }
 
-// Peek показывает верхний элемент, НЕ снимая его. Тот же приём (T, bool): из
-// пустого стека — (нулевое значение, false).
+// Peek returns the top item without removing it. The boolean result is false
+// when the stack is empty.
 func (s *Stack[T]) Peek() (T, bool) {
 	if len(s.items) == 0 {
 		var zero T
@@ -58,7 +44,23 @@ func (s *Stack[T]) Peek() (T, bool) {
 	return s.items[len(s.items)-1], true
 }
 
-// Len — сколько элементов в стеке. «Пустой ли» это Len() == 0.
+// Len returns the number of items in the stack.
 func (s *Stack[T]) Len() int {
 	return len(s.items)
+}
+
+// Cap returns the capacity of the stack's backing storage.
+func (s *Stack[T]) Cap() int {
+	return cap(s.items)
+}
+
+// IsEmpty reports whether the stack contains no items.
+func (s *Stack[T]) IsEmpty() bool {
+	return len(s.items) == 0
+}
+
+// Clear removes all items while retaining allocated storage for reuse.
+func (s *Stack[T]) Clear() {
+	clear(s.items)
+	s.items = s.items[:0]
 }

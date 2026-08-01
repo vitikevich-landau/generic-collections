@@ -1,55 +1,52 @@
-package main
+package collections
 
 import (
 	"cmp"
 	"slices"
 )
 
-// ─────────────────────────────────────────────────────────────────────────────
-// slices.go — УНИВЕРСАЛЬНЫЕ ФУНКЦИИ над срезами и разбор ОГРАНИЧЕНИЙ
-// (constraints). Здесь дженерики раскрываются полнее всего: функции с ДВУМЯ
-// параметрами типа и ограничения посложнее, чем any.
-//
-// Три уровня ограничений — по нарастанию «что разрешено делать с T»:
-//
-//	any         — ничего особенного   →  Map, Filter, Reduce
-//	comparable  — можно ==             →  Index (и Set из set.go)
-//	Number      — можно + - *          →  Sum
-//	cmp.Ordered — можно < >            →  SortedKeys
-//
-// Чем строже ограничение, тем больше операций доступно ВНУТРИ функции — но тем
-// уже круг типов, к которым её можно применить. Правило: бери минимально нужное.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Map превращает []T в []U, применяя f к каждому элементу. ДВА параметра типа:
-// вход T и выход U. Оба выводятся из аргументов — писать Map[int, string] обычно
-// не нужно, компилятор догадается сам.
-//
-//	labels := Map([]int{1, 2}, func(n int) string { return fmt.Sprint(n) })
+// Map applies f to every item in in and returns the results. A nil input
+// produces a nil result.
 func Map[T, U any](in []T, f func(T) U) []U {
-	out := make([]U, len(in))
-	for i, v := range in {
-		out[i] = f(v)
+	if in == nil {
+		return nil
 	}
-	return out
+	return AppendMap(make([]U, 0, len(in)), in, f)
 }
 
-// Filter оставляет только те элементы, для которых keep вернул true. Тип не
-// меняется, поэтому здесь один параметр типа T.
+// AppendMap applies f to every item in in and appends the results to dst. It is
+// useful on hot paths where the caller can reuse destination storage.
+func AppendMap[T, U any](dst []U, in []T, f func(T) U) []U {
+	dst = slices.Grow(dst, len(in))
+	for _, v := range in {
+		dst = append(dst, f(v))
+	}
+	return dst
+}
+
+// Filter returns the items for which keep reports true. A nil input produces a
+// nil result. The result preallocates for the worst case to guarantee at most
+// one allocation.
 func Filter[T any](in []T, keep func(T) bool) []T {
-	out := make([]T, 0, len(in))
+	if in == nil {
+		return nil
+	}
+	return AppendFilter(make([]T, 0, len(in)), in, keep)
+}
+
+// AppendFilter appends the items accepted by keep to dst. Passing in[:0] as dst
+// enables allocation-free in-place filtering.
+func AppendFilter[T any](dst []T, in []T, keep func(T) bool) []T {
+	dst = slices.Grow(dst, len(in))
 	for _, v := range in {
 		if keep(v) {
-			out = append(out, v)
+			dst = append(dst, v)
 		}
 	}
-	return out
+	return dst
 }
 
-// Reduce сворачивает []T в одно значение типа U. init — стартовый аккумулятор,
-// f получает (накопленное, очередной элемент) и возвращает новое накопленное.
-//
-//	sum := Reduce([]int{1, 2, 3}, 0, func(acc, n int) int { return acc + n }) // 6
+// Reduce folds in into an accumulator, starting with init.
 func Reduce[T, U any](in []T, init U, f func(U, T) U) U {
 	acc := init
 	for _, v := range in {
@@ -58,47 +55,38 @@ func Reduce[T, U any](in []T, init U, f func(U, T) U) U {
 	return acc
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Ограничения посложнее any.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Number — СВОЁ ограничение-union для арифметики. Под [T any] написать a + b
-// нельзя: компилятор не знает, есть ли у произвольного T операция +. Union
-// перечисляет разрешённые базовые типы. Тильда ~int значит «int и любой тип с
-// БАЗОЙ int» (например, объявленный type Age int тоже подойдёт).
+// Number contains all predeclared numeric types and user-defined types with the
+// same underlying types.
 type Number interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 |
-		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
-		~float32 | ~float64
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr |
+		~float32 | ~float64 | ~complex64 | ~complex128
 }
 
-// Sum складывает все элементы. Работает благодаря ограничению Number: только оно
-// разрешает + внутри тела. С [T any] эта функция даже не скомпилировалась бы.
+// Sum returns the sum of in, or the zero value for an empty input.
 func Sum[T Number](in []T) T {
-	var total T // нулевое значение: 0 для любого числового T
+	var total T
 	for _, v := range in {
 		total += v
 	}
 	return total
 }
 
-// Index ищет первое вхождение target и возвращает его позицию (или -1).
-// Требует comparable: внутри сравниваем через ==. Для any это не написать.
-// (В стандартной библиотеке уже есть slices.Index — здесь повторяем ради
-// наглядности, как ограничение comparable включает оператор ==.)
+// Index returns the first index of target, or -1 if target is not present.
+//
+// Deprecated: use slices.Index directly in new code.
 func Index[T comparable](in []T, target T) int {
-	for i, v := range in {
-		if v == target {
-			return i
-		}
-	}
-	return -1
+	return slices.Index(in, target)
 }
 
-// Keys возвращает ключи карты срезом. ДВА параметра типа: K (ключ; сам map
-// требует, чтобы он был comparable) и V (значение; любое). Порядок ключей в map
-// СЛУЧАЙНЫЙ, поэтому Keys сортировку не гарантирует — см. SortedKeys.
+// Keys returns the keys of m in unspecified order. A nil or empty map produces
+// a nil slice.
+//
+// Deprecated: use maps.Keys with slices.Collect in new code.
 func Keys[K comparable, V any](m map[K]V) []K {
+	if len(m) == 0 {
+		return nil
+	}
 	out := make([]K, 0, len(m))
 	for k := range m {
 		out = append(out, k)
@@ -106,13 +94,9 @@ func Keys[K comparable, V any](m map[K]V) []K {
 	return out
 }
 
-// SortedKeys возвращает ключи карты ОТСОРТИРОВАННЫМИ. Ограничение K — не просто
-// comparable, а cmp.Ordered (стандартный пакет cmp, Go 1.21+): типы, у которых
-// есть < > (числа и строки). Сортируем через slices.Sort — это тоже дженерик из
-// стандартной библиотеки, построенный ровно на таком же ограничении.
+// SortedKeys returns the keys of m in ascending order.
 //
-// Именно так удобно ДЕТЕРМИНИРОВАННО печатать множество Set[T]: оно map, порядок
-// обхода которого случаен, а SortedKeys даёт стабильный порядок вывода.
+// Deprecated: use slices.Sorted(maps.Keys(m)) in new code.
 func SortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
 	out := Keys(m)
 	slices.Sort(out)

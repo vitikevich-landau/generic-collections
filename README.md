@@ -1,131 +1,138 @@
-# generic-collections — дженерики (generics) в Go
+# generic-collections
 
-Небольшой учебный проект на Go про **дженерики** (параметры типа, Go 1.18+).
-Это мини-«тулкит» типобезопасных коллекций: стек, очередь, множество — и пара
-универсальных функций над срезами (`Map`, `Filter`, `Reduce`). Один и тот же
-код одинаково работает и с числами, и со строками, и с твоими структурами —
-**без `interface{}` и без приведений типа** вроде `v.(int)`.
+Небольшая библиотека типобезопасных generic-коллекций для Go без внешних
+зависимостей:
 
-До Go 1.18, чтобы написать «стек чего угодно», приходилось хранить `interface{}`
-и руками приводить значения обратно — легко ошибиться и словить панику в
-рантайме. Дженерики решают это: пишешь код один раз с «параметром типа», а
-компилятор подставляет конкретный тип и проверяет всё **заранее**.
+- `Stack[T]` — стек на срезе;
+- `Queue[T]` — динамический кольцевой FIFO-буфер;
+- `Set[T comparable]` — множество на `map[T]struct{}`;
+- `Map`, `Filter`, `Reduce`, `Sum` и варианты `AppendMap`/`AppendFilter` для
+  переиспользования памяти.
 
-## Что осваиваем
-
-**Параметр типа `[T any]`.** В квадратных скобках после имени объявляем
-«переменную-тип». `any` — ограничение «любой тип» (псевдоним `interface{}`).
-Внутри `T` — обычный тип:
-
-```go
-type Stack[T any] struct {
-    items []T
-}
-```
-
-**Инстанциация — подставляем конкретный тип.** `Stack[int]` — это уже конкретный
-«стек интов». Часто тип можно не писать: компилятор выведет его из аргументов
-(`Map([]int{1,2}, double)` — `T` и `U` выведутся сами).
-
-**Ограничения (constraints).** Ограничение говорит, «что разрешено делать с `T`».
-`any` — ничего особенного; `comparable` — можно сравнивать через `==` (нужно для
-ключей карты и множества); union вроде `Number` — можно арифметику `+ - *`;
-`cmp.Ordered` — можно `<` `>` (числа и строки).
-
-```go
-type Set[T comparable] map[T]struct{}   // ключу карты нужен comparable
-
-type Number interface { ~int | ~int64 | ~float64 }  // сокращённо; в slices.go — все 12 числовых типов
-func Sum[T Number](in []T) T             // теперь внутри можно a + b
-```
-
-**Универсальные функции над срезами.** Два параметра типа — вход `T`, выход `U`:
-
-```go
-func Map[T, U any](in []T, f func(T) U) []U
-func Filter[T any](in []T, keep func(T) bool) []T
-func Reduce[T, U any](in []T, init U, f func(U, T) U) U
-```
-
-**Методы не вводят своих параметров типа.** Их объявляет только сам тип
-(`Stack[T]`), а методы лишь используют. Нужен новый параметр — делай обычную
-функцию (`Map`), а не метод.
-
-## Визуализация
-
-Рядом лежит наглядная HTML-схема — открой в браузере
-[`docs/architecture.html`](docs/architecture.html). В ней:
-
-- контраст «старый `interface{}` против дженериков»;
-- карта тулкита, раскрашенная по силе ограничения (`any` → `comparable` → `Number`);
-- как из шаблона `Stack[T]` получается конкретный `Stack[int]` и как работает
-  вывод типов;
-- LIFO-стек против FIFO-очереди и приём `(T, bool)` для пустой коллекции;
-- почему множеству нужен именно `comparable` и чем опасна `nil`-карта;
-- конвейер `Map`/`Filter`/`Reduce` (`[]T → []U`);
-- «лестница ограничений»: чем строже — тем больше можно внутри, но уже круг типов;
-- «живая трасса» — реальный вывод `go run .`.
-
-Исходное задание к проекту лежит рядом:
-[`docs/05-generic-collections-generics.md`](docs/05-generic-collections-generics.md).
-
-## Структура проекта
-
-| Файл | Назначение |
-| --- | --- |
-| `stack.go` | `Stack[T any]` — LIFO: `Push`, `Pop`, `Peek`, `Len` |
-| `queue.go` | `Queue[T any]` — FIFO: `Enqueue`, `Dequeue`, `Len` |
-| `set.go` | `Set[T comparable]` — `map[T]struct{}`: `NewSet`, `Add`, `Has`, `Remove`, `Len`, `Union`, `Intersect` |
-| `slices.go` | `Map`, `Filter`, `Reduce`, `Sum`, `Index`, `Keys`, `SortedKeys` + ограничение `Number` |
-| `main.go` | Демо-сценарий: всё по шагам на числах, строках и структуре `Point` |
-| `*_test.go` | Тесты: порядок LIFO/FIFO, пустые коллекции, дедуп, паника `nil`-карты, `~int` |
-| `docs/architecture.html` | Учебная визуализация темы |
-| `docs/05-generic-collections-generics.md` | Исходное задание к проекту |
+Основной пакет импортируемый; демонстрационная программа находится в
+`cmd/demo`.
 
 ## Требования
 
-- Go 1.25 или новее (дженерики — от 1.18; `cmp.Ordered` и пакет `slices` — от 1.21).
-- Внешних зависимостей нет: `cmp` и `slices` — из стандартной библиотеки.
+Go 1.25 или новее.
 
-## Запуск
+## Установка
 
 ```bash
-go run .
+go get github.com/vitikevich-landau/generic-collections
 ```
 
-Сценарий в `main.go` по шагам показывает: LIFO-стек и FIFO-очередь; как пустой
-`Pop`/`Dequeue` возвращает `(нулевое значение, false)` вместо паники; множество с
-отсевом дубликатов, `Union`/`Intersect`; `Map`/`Filter`/`Reduce` (в том числе со
-сменой типа `int → string`); и `Sum` над разными числовыми типами.
+```go
+import collections "github.com/vitikevich-landau/generic-collections"
+```
 
-## Проверка
+## Stack
+
+Нулевое значение готово к работе:
+
+```go
+var stack collections.Stack[int]
+stack.Push(10)
+stack.Push(20)
+
+value, ok := stack.Pop() // 20, true
+```
+
+Если заранее известен ожидаемый размер, можно избежать перевыделений:
+
+```go
+stack := collections.NewStack[string](128)
+```
+
+`Pop` и `Clear` обнуляют освобождённые слоты, поэтому backing array не удерживает
+удалённые указатели, срезы, карты и другие ссылочные значения.
+
+## Queue
+
+`Queue` реализована как растущий кольцевой буфер с capacity, равной степени
+двойки. После прогрева пары `Enqueue`/`Dequeue` не аллоцируют память и не
+копируют живые элементы очереди.
+
+```go
+queue := collections.NewQueue[string](100)
+queue.Enqueue("first")
+queue.Enqueue("second")
+
+value, ok := queue.Dequeue() // "first", true
+```
+
+Нулевое значение `Queue[T]` также готово к работе. `Clear` сохраняет выделенный
+буфер для повторного использования и обнуляет все занятые позиции.
+
+## Set
+
+```go
+left := collections.NewSet(1, 2, 3)
+right := collections.NewSet(2, 3, 4)
+
+union := left.Union(right)         // {1,2,3,4}
+common := left.Intersect(right)    // {2,3}
+onlyLeft := left.Difference(right) // {1}
+```
+
+`Intersect` всегда обходит меньшее множество, поэтому его сложность —
+`O(min(len(left), len(right)))` проверок.
+
+Нулевое значение `Set[T]` — `nil`-карта. Чтение, `Remove` и `Clear` безопасны,
+но перед `Add` множество нужно создать через `NewSet`, `NewSetWithCapacity` или
+`make`.
+
+## Функции над срезами
+
+```go
+numbers := []int{1, 2, 3, 4}
+
+squares := collections.Map(numbers, func(v int) int { return v * v })
+evens := collections.Filter(numbers, func(v int) bool { return v%2 == 0 })
+sum := collections.Reduce(numbers, 0, func(acc, v int) int { return acc + v })
+```
+
+Для горячих путей можно переиспользовать destination:
+
+```go
+dst = collections.AppendMap(dst[:0], numbers, transform)
+numbers = collections.AppendFilter(numbers[:0], numbers, keep)
+```
+
+`Index`, `Keys` и `SortedKeys` оставлены для совместимости. В новом коде можно
+использовать стандартные `slices.Index`, `maps.Keys` и
+`slices.Sorted(maps.Keys(m))`.
+
+## Производительность
+
+Бенчмарки входят в репозиторий:
+
+```bash
+go test -run '^$' -bench . -benchmem
+```
+
+Конкретные цифры зависят от процессора и версии Go. Важные инварианты:
+
+- `Stack.Push` и `Stack.Pop` — амортизированно `O(1)`;
+- `Queue.Enqueue` — амортизированно `O(1)`, `Queue.Dequeue` — `O(1)`;
+- steady-state очередь не аллоцирует;
+- `Set.Has`, `Add`, `Remove` — в среднем `O(1)`;
+- `Set.Intersect` обходит меньшее множество;
+- `Map` и `Filter` делают не более одной аллокации результата;
+- `AppendMap` и `AppendFilter` могут работать без аллокаций при достаточном
+  capacity.
+
+Коллекции намеренно не содержат mutex. Для совместного использования из разных
+goroutine синхронизацию должен обеспечить вызывающий код.
+
+## Проверка и демо
 
 ```bash
 go test ./...
-go vet ./...
-```
-
-Конкурентности в проекте нет, но с детектором гонок тоже всё чисто:
-
-```bash
 go test -race ./...
+go vet ./...
+go run ./cmd/demo
 ```
 
-## Грабли (кратко)
-
-- **Для ключей нужен `comparable`.** `Set[T any]` не скомпилируется: `map`
-  требует сравнимый ключ. Поэтому `Set[T comparable]`.
-- **Без числового ограничения нельзя `a + b`.** Под `[T any]` компилятор не
-  знает, есть ли у типа `+`. Нужен union-constraint (`Number`).
-- **`Pop`/`Dequeue` из пустого — это `(нулевое значение, false)`, а не паника.**
-  Всегда возвращай второй `bool` и проверяй его у вызывающего
-  (`var zero T; return zero, false`).
-- **`Set` нужно создать до `Add`.** Нулевое значение `Set[T]` — это `nil`-карта:
-  `Has`/`Remove` на ней безопасны, но `Add` **паникует** («assignment to entry in
-  nil map»). Создавай через `make`/`NewSet`. У `Stack`/`Queue` нулевое значение
-  сразу рабочее (там `append`).
-- **Методы со своими `[U]` запрещены.** Нужен новый параметр типа — делай обычную
-  функцию (`Map`), а не метод.
-- **Не «генерь» всё подряд.** Если хватает интерфейса (`io.Writer`,
-  `fmt.Stringer`) — бери интерфейс, он проще. Дженерики — когда важно **сохранить
-  конкретный тип** на входе и выходе.
+Материалы в `docs/` относятся к исходной учебной версии проекта и сохранены как
+история развития реализации.
