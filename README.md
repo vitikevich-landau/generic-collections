@@ -95,9 +95,14 @@ sum := collections.Reduce(numbers, 0, func(acc, v int) int { return acc + v })
 Для горячих путей можно переиспользовать destination:
 
 ```go
-dst = collections.AppendMap(dst[:0], numbers, transform)
+mapped = collections.AppendMap(mapped[:0], numbers, transform)
 numbers = collections.AppendFilter(numbers[:0], numbers, keep)
 ```
+
+Буфер `mapped` в `AppendMap` не должен пересекаться с `numbers`: произвольный
+overlap потребовал бы сохранения входа в дополнительной аллокации. Для
+`AppendFilter` специально поддерживается in-place форма `in[:0], in`; другие
+перекрывающиеся расположения `dst` и `in` не поддерживаются.
 
 `Index`, `Keys` и `SortedKeys` оставлены для совместимости. В новом коде можно
 использовать стандартные `slices.Index`, `maps.Keys` и

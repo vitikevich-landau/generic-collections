@@ -15,7 +15,9 @@ func Map[T, U any](in []T, f func(T) U) []U {
 }
 
 // AppendMap applies f to every item in in and appends the results to dst. It is
-// useful on hot paths where the caller can reuse destination storage.
+// useful on hot paths where the caller can reuse destination storage. The
+// append region of dst must not overlap in; supporting arbitrary overlap would
+// require preserving the input in an additional allocation.
 func AppendMap[T, U any](dst []U, in []T, f func(T) U) []U {
 	dst = slices.Grow(dst, len(in))
 	for _, v := range in {
@@ -35,7 +37,8 @@ func Filter[T any](in []T, keep func(T) bool) []T {
 }
 
 // AppendFilter appends the items accepted by keep to dst. Passing in[:0] as dst
-// enables allocation-free in-place filtering.
+// enables allocation-free in-place filtering. Other overlapping layouts of dst
+// and in are unsupported because appends may overwrite unread input values.
 func AppendFilter[T any](dst []T, in []T, keep func(T) bool) []T {
 	dst = slices.Grow(dst, len(in))
 	for _, v := range in {

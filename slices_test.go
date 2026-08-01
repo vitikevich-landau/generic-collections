@@ -25,7 +25,7 @@ func TestMapFilterReduce(t *testing.T) {
 	}
 }
 
-func TestAppendMapReusesDestination(t *testing.T) {
+func TestAppendMapReusesNonOverlappingDestination(t *testing.T) {
 	dst := make([]int, 1, 4)
 	dst[0] = 10
 	first := &dst[0]
