@@ -19,5 +19,7 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
           cache: false
+      - run: test -z "$(gofmt -l .)"
       - run: go test -race ./...
       - run: go vet ./...
+      - run: go test -run '^$' -fuzz FuzzQueueMatchesSlice -fuzztime 30s .

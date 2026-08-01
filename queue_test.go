@@ -1,6 +1,9 @@
 package collections
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestQueueZeroValueAndFIFO(t *testing.T) {
 	var q Queue[int]
@@ -48,6 +51,42 @@ func TestQueueWrapAndGrow(t *testing.T) {
 	}
 }
 
+func TestQueueGrowContiguous(t *testing.T) {
+	var q Queue[int]
+	for i := 0; i < 17; i++ {
+		q.Enqueue(i)
+	}
+
+	if q.Cap() != 32 {
+		t.Fatalf("Cap after contiguous growth = %d, want 32", q.Cap())
+	}
+	for want := 0; want < 17; want++ {
+		if got, ok := q.Dequeue(); !ok || got != want {
+			t.Fatalf("Dequeue = (%d, %v), want (%d, true)", got, ok, want)
+		}
+	}
+}
+
+func TestQueuePeekEmptyAndWrapped(t *testing.T) {
+	var q Queue[int]
+	if got, ok := q.Peek(); ok || got != 0 {
+		t.Fatalf("Peek on empty queue = (%d, %v), want (0, false)", got, ok)
+	}
+
+	for i := 0; i < 8; i++ {
+		q.Enqueue(i)
+	}
+	for i := 0; i < 5; i++ {
+		q.Dequeue()
+	}
+	for i := 8; i < 11; i++ {
+		q.Enqueue(i)
+	}
+	if got, ok := q.Peek(); !ok || got != 5 {
+		t.Fatalf("Peek on wrapped queue = (%d, %v), want (5, true)", got, ok)
+	}
+}
+
 func TestQueueClearsRemovedReferences(t *testing.T) {
 	type payload struct{ data [64]byte }
 	p := &payload{}
@@ -87,7 +126,39 @@ func TestQueueClearWrapped(t *testing.T) {
 	}
 }
 
+func TestQueueClearContiguous(t *testing.T) {
+	q := NewQueue[*int](8)
+	values := make([]int, 8)
+	for i := range values {
+		q.Enqueue(&values[i])
+	}
+	for i := 0; i < 3; i++ {
+		q.Dequeue()
+	}
+	q.Clear()
+	if !q.IsEmpty() || q.Cap() != 8 {
+		t.Fatalf("after Clear: IsEmpty=%v Cap=%d, want Cap=8", q.IsEmpty(), q.Cap())
+	}
+	for i, v := range q.buf {
+		if v != nil {
+			t.Fatalf("backing slot %d was not cleared", i)
+		}
+	}
+	q.Clear()
+	if !q.IsEmpty() {
+		t.Fatal("Clear on an empty queue is not a no-op")
+	}
+}
+
 func TestNewQueueCapacity(t *testing.T) {
+	if got := NewQueue[int](0).Cap(); got != 0 {
+		t.Fatalf("NewQueue(0).Cap = %d, want 0", got)
+	}
+	for _, requested := range []int{1, 2, 4, 8} {
+		if got := NewQueue[int](requested).Cap(); got != minQueueCapacity {
+			t.Fatalf("NewQueue(%d).Cap = %d, want %d", requested, got, minQueueCapacity)
+		}
+	}
 	if got := NewQueue[int](9).Cap(); got != 16 {
 		t.Fatalf("NewQueue(9).Cap = %d, want 16", got)
 	}
@@ -97,6 +168,15 @@ func TestNewQueueCapacity(t *testing.T) {
 		}
 	}()
 	NewQueue[int](-1)
+}
+
+func TestNewQueueCapacityOverflowPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewQueue with an unrepresentable capacity did not panic")
+		}
+	}()
+	NewQueue[int](math.MaxInt)
 }
 
 func FuzzQueueMatchesSlice(f *testing.F) {
@@ -110,20 +190,24 @@ func FuzzQueueMatchesSlice(f *testing.F) {
 			if operation&1 == 0 {
 				q.Enqueue(operation)
 				reference = append(reference, operation)
-				continue
+			} else {
+				got, ok := q.Dequeue()
+				if len(reference) == 0 {
+					if ok {
+						t.Fatalf("Dequeue on empty reference = (%d, true)", got)
+					}
+				} else {
+					if !ok || got != reference[0] {
+						t.Fatalf("Dequeue = (%d, %v), want (%d, true)", got, ok, reference[0])
+					}
+					reference = reference[1:]
+				}
 			}
 
-			got, ok := q.Dequeue()
-			if len(reference) == 0 {
-				if ok {
-					t.Fatalf("Dequeue on empty reference = (%d, true)", got)
-				}
-				continue
+			front, ok := q.Peek()
+			if ok != (len(reference) > 0) || (ok && front != reference[0]) {
+				t.Fatalf("Peek = (%d, %v), want front of %v", front, ok, reference)
 			}
-			if !ok || got != reference[0] {
-				t.Fatalf("Dequeue = (%d, %v), want (%d, true)", got, ok, reference[0])
-			}
-			reference = reference[1:]
 		}
 
 		if q.Len() != len(reference) {
