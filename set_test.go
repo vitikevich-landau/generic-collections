@@ -1,66 +1,75 @@
-package main
+package collections
 
 import "testing"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// set_test.go — проверяем уникальность, наличие, удаление и операции над
-// множествами. Отдельно — главная грабля темы: Add на nil-карте ПАНИКует, а
-// созданное через NewSet множество работает.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// NewSet отсеивает дубликаты; Has/Remove/Len работают как ожидается.
 func TestSetBasics(t *testing.T) {
-	s := NewSet("a", "b", "a") // дубликат "a" должен схлопнуться
-	if s.Len() != 2 {
-		t.Fatalf("Len = %d, ожидали 2 (дубликат отброшен)", s.Len())
-	}
-	if !s.Has("a") || !s.Has("b") {
-		t.Fatal("Has должен находить оба элемента")
-	}
-	if s.Has("z") {
-		t.Fatal("Has(\"z\") = true, ожидали false")
+	s := NewSet("a", "b", "a")
+	if s.Len() != 2 || !s.Has("a") || !s.Has("b") {
+		t.Fatalf("NewSet = %v, want {a,b}", s)
 	}
 	s.Remove("a")
 	if s.Has("a") || s.Len() != 1 {
-		t.Fatalf("после Remove(\"a\"): Has=%v Len=%d, ожидали false и 1", s.Has("a"), s.Len())
+		t.Fatalf("after Remove: Has(a)=%v Len=%d", s.Has("a"), s.Len())
 	}
-	s.Remove("нет-такого") // Remove отсутствующего — не ошибка
+	s.Clear()
+	if !s.IsEmpty() {
+		t.Fatalf("set is not empty after Clear: %v", s)
+	}
 }
 
-// Union и Intersect возвращают новое множество и не трогают исходные.
-func TestSetUnionIntersect(t *testing.T) {
+func TestSetOperations(t *testing.T) {
 	a := NewSet(1, 2, 3)
 	b := NewSet(2, 3, 4)
 
-	u := a.Union(b)
-	if u.Len() != 4 || !u.Has(1) || !u.Has(4) {
-		t.Fatalf("Union = %v (Len %d), ожидали {1,2,3,4}", SortedKeys(u), u.Len())
+	assertSet(t, a.Union(b), 1, 2, 3, 4)
+	assertSet(t, a.Intersect(b), 2, 3)
+	assertSet(t, a.Difference(b), 1)
+
+	clone := a.Clone()
+	clone.Add(9)
+	if a.Has(9) {
+		t.Fatal("Clone shares map storage with the source")
 	}
-	i := a.Intersect(b)
-	if i.Len() != 2 || !i.Has(2) || !i.Has(3) || i.Has(1) {
-		t.Fatalf("Intersect = %v (Len %d), ожидали {2,3}", SortedKeys(i), i.Len())
-	}
-	// Исходные множества не изменились.
-	if a.Len() != 3 || b.Len() != 3 {
-		t.Fatalf("исходные множества изменились: a=%d b=%d", a.Len(), b.Len())
-	}
+	assertSet(t, a, 1, 2, 3)
 }
 
-// nil-множество: Has/Remove безопасны, а вот Add ПАНИКует — это и показываем
-// через recover. Именно из-за этого множество создают через NewSet/make.
-func TestNilSetAddPanics(t *testing.T) {
-	var s Set[int] // nil-карта
-
-	if s.Has(1) {
-		t.Fatal("Has на nil-множестве должен вернуть false, а не паниковать")
+func TestSetIntersectWalksSmallerInput(t *testing.T) {
+	large := NewSetWithCapacity[int](10_000)
+	for i := 0; i < 10_000; i++ {
+		large.Add(i)
 	}
-	s.Remove(1) // no-op, без паники
+	small := NewSet(1, 9_999, 20_000)
+	assertSet(t, large.Intersect(small), 1, 9_999)
+	assertSet(t, small.Intersect(large), 1, 9_999)
+}
+
+func TestNilSetReadsAndRemoveAreSafeButAddPanics(t *testing.T) {
+	var s Set[int]
+	if s.Has(1) || !s.IsEmpty() {
+		t.Fatal("nil Set has unexpected values")
+	}
+	s.Remove(1)
+	s.Clear()
+	if s.Clone() != nil {
+		t.Fatal("Clone of a nil Set did not preserve nilness")
+	}
 
 	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("ожидали панику при Add на nil-множестве, её не было")
+		if recover() == nil {
+			t.Fatal("Add on a nil Set did not panic")
 		}
 	}()
-	s.Add(1) // ПАНИКА: assignment to entry in nil map
-	t.Fatal("до этой строки дойти не должны — Add обязан был паникнуть")
+	s.Add(1)
+}
+
+func assertSet[T comparable](t *testing.T, got Set[T], want ...T) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("set length = %d, want %d; set=%v", len(got), len(want), got)
+	}
+	for _, v := range want {
+		if !got.Has(v) {
+			t.Fatalf("set %v does not contain %v", got, v)
+		}
+	}
 }

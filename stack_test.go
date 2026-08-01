@@ -1,64 +1,61 @@
-package main
+package collections
 
 import "testing"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// stack_test.go — проверяем порядок LIFO, поведение на пустом стеке и то, что
-// параметр типа «донёсся»: Stack[int].Pop отдаёт именно int, Stack[string] —
-// string, без всяких приведений.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Пустой стек не должен ничего отдавать — только (нулевое значение, false).
-func TestStackEmptyPop(t *testing.T) {
+func TestStackZeroValueAndLIFO(t *testing.T) {
 	var s Stack[int]
-	if v, ok := s.Pop(); ok || v != 0 {
-		t.Fatalf("пустой стек: получили (%v, %v), ожидали (0, false)", v, ok)
+	if _, ok := s.Pop(); ok {
+		t.Fatal("Pop on an empty stack returned ok=true")
 	}
-	if s.Len() != 0 {
-		t.Fatalf("Len пустого стека = %d, ожидали 0", s.Len())
+	if got, ok := s.Peek(); ok || got != 0 {
+		t.Fatalf("Peek on empty stack = (%d, %v), want (0, false)", got, ok)
 	}
-}
 
-// Кладём три, снимаем три — порядок должен быть обратным (LIFO).
-func TestStackLIFO(t *testing.T) {
-	var s Stack[int]
-	s.Push(1)
-	s.Push(2)
-	s.Push(3)
-	if s.Len() != 3 {
-		t.Fatalf("Len после трёх Push = %d, ожидали 3", s.Len())
+	for _, v := range []int{1, 2, 3} {
+		s.Push(v)
 	}
-	for _, want := range []int{3, 2, 1} { // снимаем сверху → обратный порядок
-		if v, ok := s.Pop(); !ok || v != want {
-			t.Fatalf("Pop = (%v, %v), ожидали (%d, true)", v, ok, want)
+	if got, ok := s.Peek(); !ok || got != 3 {
+		t.Fatalf("Peek = (%d, %v), want (3, true)", got, ok)
+	}
+	for _, want := range []int{3, 2, 1} {
+		if got, ok := s.Pop(); !ok || got != want {
+			t.Fatalf("Pop = (%d, %v), want (%d, true)", got, ok, want)
 		}
 	}
-	if _, ok := s.Pop(); ok {
-		t.Fatal("после опустошения Pop должен вернуть ok=false")
+	if !s.IsEmpty() || s.Len() != 0 {
+		t.Fatalf("empty stack: IsEmpty=%v Len=%d", s.IsEmpty(), s.Len())
 	}
 }
 
-// Peek показывает вершину, не снимая её.
-func TestStackPeek(t *testing.T) {
-	var s Stack[string]
-	if _, ok := s.Peek(); ok {
-		t.Fatal("Peek пустого стека должен вернуть ok=false")
+func TestStackClearsRemovedReferences(t *testing.T) {
+	type payload struct{ data [64]byte }
+	p := &payload{}
+
+	var s Stack[*payload]
+	s.Push(p)
+	if got, ok := s.Pop(); !ok || got != p {
+		t.Fatalf("Pop = (%p, %v), want (%p, true)", got, ok, p)
 	}
-	s.Push("низ")
-	s.Push("верх")
-	if v, ok := s.Peek(); !ok || v != "верх" {
-		t.Fatalf("Peek = (%q, %v), ожидали (\"верх\", true)", v, ok)
-	}
-	if s.Len() != 2 {
-		t.Fatalf("Peek не должен менять размер: Len = %d, ожидали 2", s.Len())
+	if retained := s.items[:cap(s.items)][0]; retained != nil {
+		t.Fatal("popped pointer is still retained in the backing array")
 	}
 }
 
-// Stack работает и с пользовательскими структурами — тип сохраняется.
-func TestStackStructType(t *testing.T) {
-	var s Stack[Point]
-	s.Push(Point{1, 2})
-	if v, ok := s.Pop(); !ok || v != (Point{1, 2}) {
-		t.Fatalf("Pop = (%v, %v), ожидали ((1,2), true)", v, ok)
+func TestStackCapacityAndClear(t *testing.T) {
+	s := NewStack[*int](16)
+	if s.Cap() != 16 {
+		t.Fatalf("Cap = %d, want 16", s.Cap())
+	}
+	a, b := 1, 2
+	s.Push(&a)
+	s.Push(&b)
+	s.Clear()
+	if !s.IsEmpty() || s.Cap() != 16 {
+		t.Fatalf("after Clear: IsEmpty=%v Cap=%d", s.IsEmpty(), s.Cap())
+	}
+	for i, v := range s.items[:cap(s.items)] {
+		if v != nil {
+			t.Fatalf("backing slot %d was not cleared", i)
+		}
 	}
 }

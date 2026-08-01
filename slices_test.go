@@ -1,77 +1,109 @@
-package main
+package collections
 
 import (
 	"reflect"
 	"testing"
 )
 
-// ─────────────────────────────────────────────────────────────────────────────
-// slices_test.go — проверяем универсальные функции и ограничения. Важные точки:
-// Map умеет МЕНЯТЬ тип (int→string), Sum работает с любым числовым типом (в том
-// числе объявленным через ~), а SortedKeys даёт детерминированный порядок.
-// ─────────────────────────────────────────────────────────────────────────────
-
 func TestMapFilterReduce(t *testing.T) {
-	nums := []int{1, 2, 3, 4}
+	numbers := []int{1, 2, 3, 4}
 
-	got := Map(nums, func(n int) int { return n * n })
-	if want := []int{1, 4, 9, 16}; !reflect.DeepEqual(got, want) {
-		t.Errorf("Map: got %v, want %v", got, want)
+	if got, want := Map(numbers, func(v int) int { return v * v }), []int{1, 4, 9, 16}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Map = %v, want %v", got, want)
 	}
-
-	evens := Filter(nums, func(n int) bool { return n%2 == 0 })
-	if want := []int{2, 4}; !reflect.DeepEqual(evens, want) {
-		t.Errorf("Filter: got %v, want %v", evens, want)
+	if got, want := Filter(numbers, func(v int) bool { return v%2 == 0 }), []int{2, 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Filter = %v, want %v", got, want)
 	}
-
-	sum := Reduce(nums, 0, func(acc, n int) int { return acc + n })
-	if sum != 10 {
-		t.Errorf("Reduce: got %d, want 10", sum)
+	if got := Reduce(numbers, 0, func(acc, v int) int { return acc + v }); got != 10 {
+		t.Fatalf("Reduce = %d, want 10", got)
+	}
+	if Map[int, int](nil, func(v int) int { return v }) != nil {
+		t.Fatal("Map(nil) did not preserve nilness")
+	}
+	if Filter[int](nil, func(int) bool { return true }) != nil {
+		t.Fatal("Filter(nil) did not preserve nilness")
 	}
 }
 
-// Главная фишка Map — второй параметр типа U: тип на выходе может отличаться.
-func TestMapChangesType(t *testing.T) {
-	got := Map([]int{1, 2, 3}, func(n int) string {
-		return string(rune('a' + n - 1))
-	})
-	if want := []string{"a", "b", "c"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("Map int→string: got %v, want %v", got, want)
+func TestAppendMapReusesNonOverlappingDestination(t *testing.T) {
+	dst := make([]int, 1, 4)
+	dst[0] = 10
+	first := &dst[0]
+	got := AppendMap(dst, []int{1, 2, 3}, func(v int) int { return v * 2 })
+	if want := []int{10, 2, 4, 6}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("AppendMap = %v, want %v", got, want)
+	}
+	if &got[0] != first {
+		t.Fatal("AppendMap allocated despite sufficient destination capacity")
 	}
 }
 
-// Age — свой тип с базой int. Тильда ~int в ограничении Number разрешает
-// использовать Sum и на нём: это проверяем компиляцией + результатом.
-type Age int
-
-func TestSumConstraints(t *testing.T) {
-	if got := Sum([]int{1, 2, 3, 4}); got != 10 {
-		t.Errorf("Sum[int]: got %d, want 10", got)
+func TestAppendFilterInPlace(t *testing.T) {
+	in := []int{1, 2, 3, 4, 5, 6}
+	first := &in[0]
+	got := AppendFilter(in[:0], in, func(v int) bool { return v%2 == 0 })
+	if want := []int{2, 4, 6}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("AppendFilter = %v, want %v", got, want)
 	}
-	if got := Sum([]float64{0.5, 1.5, 2}); got != 4.0 {
-		t.Errorf("Sum[float64]: got %v, want 4.0", got)
-	}
-	if got := Sum([]Age{10, 20, 30}); got != Age(60) { // ~int в действии
-		t.Errorf("Sum[Age]: got %d, want 60", got)
+	if &got[0] != first {
+		t.Fatal("AppendFilter did not reuse in-place storage")
 	}
 }
 
-func TestIndex(t *testing.T) {
-	in := []string{"a", "b", "c"}
-	if got := Index(in, "b"); got != 1 {
-		t.Errorf("Index(b): got %d, want 1", got)
+func TestAppendFilterInPlaceClearsRejectedReferences(t *testing.T) {
+	type payload struct {
+		keep bool
 	}
-	if got := Index(in, "z"); got != -1 {
-		t.Errorf("Index(z): got %d, want -1", got)
+
+	first := &payload{keep: true}
+	second := &payload{}
+	third := &payload{keep: true}
+	fourth := &payload{}
+	in := []*payload{first, second, third, fourth}
+
+	got := AppendFilter(in[:0], in, func(v *payload) bool { return v.keep })
+	if want := []*payload{first, third}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("AppendFilter = %v, want %v", got, want)
+	}
+	for i, v := range got[:cap(got)][len(got):] {
+		if v != nil {
+			t.Fatalf("rejected tail slot %d retains %p", len(got)+i, v)
+		}
 	}
 }
 
-// SortedKeys обязан давать один и тот же порядок независимо от случайного обхода
-// карты. Заодно проверяем, что он принимает Set[T] (это тоже map).
-func TestSortedKeys(t *testing.T) {
-	s := NewSet("груша", "яблоко", "слива")
-	got := SortedKeys(s)
-	if want := []string{"груша", "слива", "яблоко"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("SortedKeys: got %v, want %v", got, want)
+type age int
+
+func TestSumAllNumericFamilies(t *testing.T) {
+	if got := Sum([]age{10, 20, 30}); got != 60 {
+		t.Fatalf("Sum(age) = %d, want 60", got)
+	}
+	if got := Sum([]uintptr{1, 2, 3}); got != 6 {
+		t.Fatalf("Sum(uintptr) = %d, want 6", got)
+	}
+	if got := Sum([]complex128{1 + 2i, 3 + 4i}); got != 4+6i {
+		t.Fatalf("Sum(complex128) = %v, want 4+6i", got)
+	}
+}
+
+func TestCompatibilityHelpers(t *testing.T) {
+	if got := Index([]string{"a", "b", "c"}, "b"); got != 1 {
+		t.Fatalf("Index = %d, want 1", got)
+	}
+	m := map[string]int{"b": 2, "a": 1}
+	if got, want := SortedKeys(m), []string{"a", "b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("SortedKeys = %v, want %v", got, want)
+	}
+}
+
+func TestKeysNilForEmptyMaps(t *testing.T) {
+	if Keys[string, int](nil) != nil {
+		t.Fatal("Keys(nil) did not return nil")
+	}
+	if Keys(map[string]int{}) != nil {
+		t.Fatal("Keys of an empty map did not return nil")
+	}
+	if SortedKeys(map[string]int{}) != nil {
+		t.Fatal("SortedKeys of an empty map did not return nil")
 	}
 }

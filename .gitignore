@@ -2,6 +2,7 @@
 /generic-collections
 /generic-collections.exe
 /coverage.out
+/benchmark.txt
 
 # Editor settings
 .idea/
