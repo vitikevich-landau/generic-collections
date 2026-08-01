@@ -37,14 +37,19 @@ func Filter[T any](in []T, keep func(T) bool) []T {
 }
 
 // AppendFilter appends the items accepted by keep to dst. Passing in[:0] as dst
-// enables allocation-free in-place filtering. Other overlapping layouts of dst
-// and in are unsupported because appends may overwrite unread input values.
+// enables allocation-free in-place filtering and clears the rejected tail so it
+// cannot retain references. Other overlapping layouts of dst and in are
+// unsupported because appends may overwrite unread input values.
 func AppendFilter[T any](dst []T, in []T, keep func(T) bool) []T {
+	inPlace := len(in) > 0 && len(dst) == 0 && cap(dst) >= len(in) && &dst[:1][0] == &in[0]
 	dst = slices.Grow(dst, len(in))
 	for _, v := range in {
 		if keep(v) {
 			dst = append(dst, v)
 		}
+	}
+	if inPlace {
+		clear(in[len(dst):])
 	}
 	return dst
 }

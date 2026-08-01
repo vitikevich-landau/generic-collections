@@ -50,6 +50,28 @@ func TestAppendFilterInPlace(t *testing.T) {
 	}
 }
 
+func TestAppendFilterInPlaceClearsRejectedReferences(t *testing.T) {
+	type payload struct {
+		keep bool
+	}
+
+	first := &payload{keep: true}
+	second := &payload{}
+	third := &payload{keep: true}
+	fourth := &payload{}
+	in := []*payload{first, second, third, fourth}
+
+	got := AppendFilter(in[:0], in, func(v *payload) bool { return v.keep })
+	if want := []*payload{first, third}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("AppendFilter = %v, want %v", got, want)
+	}
+	for i, v := range got[:cap(got)][len(got):] {
+		if v != nil {
+			t.Fatalf("rejected tail slot %d retains %p", len(got)+i, v)
+		}
+	}
+}
+
 type age int
 
 func TestSumAllNumericFamilies(t *testing.T) {
