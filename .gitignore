@@ -1,9 +1,9 @@
-# Go build and test artifacts
+# Артефакты сборки и тестирования Go
 /generic-collections
 /generic-collections.exe
 /coverage.out
 /benchmark.txt
 
-# Editor settings
+# Настройки редакторов
 .idea/
 .vscode/

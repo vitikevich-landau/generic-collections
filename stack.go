@@ -1,25 +1,39 @@
 package collections
 
-// Stack is a LIFO collection. Its zero value is ready to use. A Stack must not
-// be copied after first use and is not safe for concurrent use.
+// Stack — стек, коллекция с дисциплиной LIFO (last in, first out): кладём
+// наверх и снимаем сверху. Внутри — обычный срез, вершина стека находится в его
+// конце, поэтому [Stack.Push] и [Stack.Pop] работают за амортизированное O(1).
+//
+// Нулевое значение готово к работе: var s Stack[int] сразу принимает Push,
+// потому что append корректно работает с nil-срезом.
+//
+// Стек нельзя копировать после первого использования — копия разделяла бы с
+// оригиналом один backing array; за этим следит поле noCopy и go vet. Stack не
+// предназначен для конкурентного использования.
 type Stack[T any] struct {
 	noCopy noCopy
 	items  []T
 }
 
-// NewStack returns an empty stack with space preallocated for capacity items.
+// NewStack возвращает пустой стек с заранее выделенным местом под capacity
+// элементов. Нужен только ради предварительного выделения памяти: если
+// ожидаемый размер неизвестен, достаточно нулевого значения Stack[T].
 func NewStack[T any](capacity int) *Stack[T] {
 	return &Stack[T]{items: make([]T, 0, capacity)}
 }
 
-// Push adds v to the top of the stack.
+// Push кладёт v на вершину стека.
 func (s *Stack[T]) Push(v T) {
 	s.items = append(s.items, v)
 }
 
-// Pop removes and returns the top item. The boolean result is false when the
-// stack is empty. The vacated slot is cleared so it cannot keep references
-// alive through the backing array.
+// Pop снимает и возвращает элемент с вершины стека. Второй результат равен
+// false, если стек пуст, — вместо паники возвращается пара
+// (нулевое значение, false), и вызывающий код обязан её проверить.
+//
+// Освободившийся слот обнуляется, чтобы backing array не удерживал ссылку на
+// снятое значение: без этого указатель оставался бы живым для сборщика мусора
+// сколь угодно долго, хотя логически элемента в стеке уже нет.
 func (s *Stack[T]) Pop() (T, bool) {
 	if len(s.items) == 0 {
 		var zero T
@@ -28,14 +42,17 @@ func (s *Stack[T]) Pop() (T, bool) {
 
 	last := len(s.items) - 1
 	v := s.items[last]
+
+	// Обнуляем освободившийся слот и только затем укорачиваем срез: сам элемент
+	// остаётся в backing array за пределами длины, но уже не хранит ссылок.
 	var zero T
 	s.items[last] = zero
 	s.items = s.items[:last]
 	return v, true
 }
 
-// Peek returns the top item without removing it. The boolean result is false
-// when the stack is empty.
+// Peek возвращает элемент с вершины стека, не снимая его. Второй результат
+// равен false, если стек пуст.
 func (s *Stack[T]) Peek() (T, bool) {
 	if len(s.items) == 0 {
 		var zero T
@@ -44,22 +61,28 @@ func (s *Stack[T]) Peek() (T, bool) {
 	return s.items[len(s.items)-1], true
 }
 
-// Len returns the number of items in the stack.
+// Len возвращает количество элементов в стеке.
 func (s *Stack[T]) Len() int {
 	return len(s.items)
 }
 
-// Cap returns the capacity of the stack's backing storage.
+// Cap возвращает полную ёмкость внутреннего хранилища, включая уже занятые
+// слоты. Число элементов, которые стек примет до следующего перевыделения
+// памяти, равно Cap()-Len().
 func (s *Stack[T]) Cap() int {
 	return cap(s.items)
 }
 
-// IsEmpty reports whether the stack contains no items.
+// IsEmpty сообщает, пуст ли стек.
 func (s *Stack[T]) IsEmpty() bool {
 	return len(s.items) == 0
 }
 
-// Clear removes all items while retaining allocated storage for reuse.
+// Clear удаляет все элементы, сохраняя выделенную память для повторного
+// использования: ёмкость после вызова не меняется.
+//
+// Сначала обнуляются занятые слоты (чтобы не удерживать ссылки), и лишь затем
+// срез укорачивается до нулевой длины.
 func (s *Stack[T]) Clear() {
 	clear(s.items)
 	s.items = s.items[:0]
